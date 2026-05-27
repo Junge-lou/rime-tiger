@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+# Rime generated/local files
+build/
+*.userdb/
+*.userdb.*
+*.prism.bin
+*.table.bin
+*.reverse.bin
+installation.yaml
+user.yaml
+sync/
+trash/
