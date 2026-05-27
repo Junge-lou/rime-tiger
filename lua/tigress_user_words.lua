@@ -373,6 +373,10 @@ local function selected_candidate(env)
     return env.engine.context:get_selected_candidate()
 end
 
+local function current_selected_text(env)
+    return genuine_text(selected_candidate(env))
+end
+
 local function remove_last_utf8_char(text)
     local pos = utf8.offset(text, -1)
     if not pos then
@@ -434,14 +438,14 @@ local function clear_capture(env)
     sync_capture_state(env)
 end
 
-local function enter_capture(env, operation)
+local function enter_capture(env, operation, default_text)
     local code = current_code(env)
     if code == "" then
         return false
     end
     env.capture = {
         code = code,
-        text = "",
+        text = default_text or "",
         query = "",
         operation = operation or "add",
     }
@@ -713,7 +717,7 @@ function processor.func(key_event, env)
     if keycode == KEY.SEMICOLON then
         return enter_capture(env, "add") and kAccepted or kNoop
     elseif keycode == KEY.APOSTROPHE then
-        return enter_capture(env, "disable") and kAccepted or disable_selected(env) and kAccepted or kNoop
+        return enter_capture(env, "disable", current_selected_text(env)) and kAccepted or disable_selected(env) and kAccepted or kNoop
     elseif keycode == KEY.UP or keycode == KEY.LEFT then
         return move_selected(env, "prev") and kAccepted or kNoop
     elseif keycode == KEY.DOWN or keycode == KEY.RIGHT then
