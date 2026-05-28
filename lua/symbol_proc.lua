@@ -1,6 +1,6 @@
 --- by 晴
 --[[
-候选唯一时分号顶字
+候选唯一时功能符号标顶
 
 放在 key_binder 前面：
 
@@ -9,16 +9,26 @@ engine:
     - ascii_composer
     - recognizer
     - lua_processor@*space_proc3
-    - lua_processor@*semicolon_proc #候选唯一时分号顶字
+    - lua_processor@*symbol_proc #候选唯一时符号顶字
     - key_binder
 
-有第二候选时不处理，继续交给 key_binder 的分号次选。
+有第二候选时不处理，继续交给 key_binder 的符号选重。
+唯一候选上屏后放行当前符号，让后续 speller、punctuator 等继续触发快符、反查或标点。
 ]]
 
-local semicolon_proc = {}
+local symbol_proc = {}
 
-local kAccepted = 1
 local kNoop = 2
+
+local function is_symbol_key(key_event)
+  local keycode = key_event.keycode
+  if key_event:repr() == "space" or keycode < 0x21 or keycode > 0x7e then
+    return false
+  end
+
+  local ch = string.char(keycode)
+  return rime_api.regex_match(ch, "[^0-9A-Za-z\\s]")
+end
 
 local function first_candidate(seg)
   if not seg or not seg.menu then
@@ -36,13 +46,13 @@ local function second_candidate(seg)
   return seg.menu:get_candidate_at(1)
 end
 
-function semicolon_proc.func(key_event, env)
+function symbol_proc.func(key_event, env)
   if key_event:release() or key_event:alt() or key_event:ctrl()
-      or key_event:shift() or key_event:caps() then
+      or key_event:caps() then
     return kNoop
   end
 
-  if key_event:repr() ~= "semicolon" then
+  if not is_symbol_key(key_event) then
     return kNoop
   end
 
@@ -63,7 +73,7 @@ function semicolon_proc.func(key_event, env)
   end
 
   context:confirm_current_selection()
-  return kAccepted
+  return kNoop -- 放行当前符号，让后续处理器继续触发快符、反查或标点
 end
 
-return semicolon_proc
+return symbol_proc

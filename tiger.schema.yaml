@@ -65,7 +65,7 @@ engine:
     - ascii_composer
     - recognizer
     - lua_processor@*space_proc3 #标顶空码不上屏
-    - lua_processor@*semicolon_proc #候选唯一时分号顶字
+    - lua_processor@*symbol_proc #候选唯一时符号顶字
     - key_binder
     - speller
     - punctuator
