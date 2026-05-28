@@ -7,6 +7,40 @@
 - 去掉 `'` 的复选相关行为。
 - 关闭候选框超长时的自动翻转。
 - 在虎词 `tigress` 方案中集成用户加词、减词和候选词序调整功能。
+- 在虎码单字 `tiger` 和虎词 `tigress` 方案中加入空码标顶清屏和候选唯一时符号顶字。
+
+## 空码标顶清屏与符号顶字
+
+该功能当前接入 `tiger` 和 `tigress`。
+
+### 功能说明
+
+- 空码时按符号，清掉错误编码并吞掉这次符号，避免错码和标点一起上屏。
+- 候选唯一时按符号，先上屏唯一候选，再让这个符号继续生效。
+- 有第二候选时不顶字，继续交给原来的符号选重逻辑，例如 `;` 仍然选二候选。
+
+### 需要复制
+
+- `lua/space_proc3.lua`
+- `lua/symbol_proc.lua`
+
+### 需要修改 schema
+
+在目标方案的 `engine/processors` 中，把两个 Lua processor 放在 `recognizer` 后、`key_binder` 前：
+
+```yaml
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - lua_processor@*space_proc3 #标顶空码不上屏
+    - lua_processor@*symbol_proc #候选唯一时符号顶字
+    # tigress 还需要保留用户词 processor，放在这里即可：
+    # - lua_processor@*tigress_user_words*processor #用户加词、减词、调序
+    - key_binder
+```
+
+顺序很重要。必须在 `key_binder` 前面，否则 `;`、`'` 这类带选重功能的符号可能会先被处理，导致清屏或顶字不完整。
 
 ## 虎词加词、减词、调序
 
