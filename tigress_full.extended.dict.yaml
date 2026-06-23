@@ -8,6 +8,8 @@ sort: by_weight
 use_preset_vocabulary: false
 import_tables:
   - tigress
+  - tigress_ci
+  - tigress_simp_ci
   - tigress.user
 
 columns:

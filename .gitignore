@@ -2,7 +2,8 @@ __pycache__/
 *.py[cod]
 
 # Development-only files
-tests/
+tests/*
+!tests/test_tigress_import_tables.py
 docs/
 tools/
 
