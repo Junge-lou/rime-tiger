@@ -16,30 +16,39 @@ Source:https://github.com/hchunhui/librime-lua/issues/35
   end
 end
 
+local function command_matches(input, ...)
+  for _, command in ipairs({...}) do
+    if input == "/" .. command or input == "\\" .. command then
+      return true
+    end
+  end
+  return false
+end
+
 local function exe(key, env)
   local engine = env.engine
   local context = engine.context
   local kNoop = 2
-  if (context.input == "/huma" or context.input == "/zhmn") then
+  if command_matches(context.input, "huma", "zhmn") then
     generic_open("https://tiger-code.com")
     context:clear()
-  elseif (context.input == "/baidu" or context.input == "/bddu" or context.input == "/fuxl") then
+  elseif command_matches(context.input, "baidu", "bddu", "fuxl") then
     generic_open("https://www.baidu.com")
-  elseif (context.input == "/biying" or context.input == "/bing" or context.input == "/biyk" or context.input == "/htxk") then
+  elseif command_matches(context.input, "biying", "bing", "biyk", "htxk") then
     generic_open("https://cn.bing.com")
-  elseif (context.input == "/guge" or context.input == "/google" or context.input == "/hgzz") then
+  elseif command_matches(context.input, "guge", "google", "hgzz") then
     generic_open("https://www.google.com")
     context:clear()
-  elseif (context.input == "/wangpan" or context.input == "/whpj" or context.input == "/mbia") then
+  elseif command_matches(context.input, "wangpan", "whpj", "mbia") then
     generic_open("http://huma.ysepan.com")
     context:clear()
-  elseif (context.input == "/genda" or context.input == "/gfda" or context.input == "/piua" or context.input == "/muyi" or context.input == "/emon" ) then
+  elseif command_matches(context.input, "genda", "gfda", "piua", "muyi", "emon") then
     generic_open("https://typer.owenyang.top")
     context:clear()
-  elseif (context.input == "/zitong" or context.input == "/zits" or context.input == "/whib") then
+  elseif command_matches(context.input, "zitong", "zits", "whib") then
     generic_open("https://zi.tools")
     context:clear()
-  elseif (context.input == "/yedian" or context.input == "/yedm" or context.input == "/dnih") then
+  elseif command_matches(context.input, "yedian", "yedm", "dnih") then
     generic_open("http://www.yedict.com")
     context:clear()
   end

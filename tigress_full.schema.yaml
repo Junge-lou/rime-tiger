@@ -29,6 +29,7 @@ engine:
   processors:
     - ascii_composer
     - recognizer
+    - lua_processor@*input_speed_stat*processor #测速统计开关
     - lua_processor@*space_proc3 #标顶空码不上屏
     - lua_processor@*symbol_proc #候选唯一时符号顶字
     - lua_processor@*tigress_user_words*processor #用户加词、减词、调序

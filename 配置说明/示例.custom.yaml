@@ -63,9 +63,20 @@ patch:
   switches/@0/reset: 0  # ascii_mode：0 中文，1 西文
   switches/@1/reset: 0  # pinyin：0 关，1 开
   switches/@2/reset: 0  # emoji_cn：0 关，1 开
-  switches/@3/reset: 0  # chaifen：0 关，1 开
-  switches/@4/reset: 0  # simplification：0 简体，1 繁体
-  # switches/@0/states: [ 中文, 西文 ]  # 也可以改开关显示文字
+  switches/@3/reset: 0  # input_speed_stat：0 关，1 开
+  switches/@4/reset: 0  # chaifen：0 关，1 开
+  switches/@5/reset: 0  # simplification：0 简体，1 繁体
+  # 也可以改开关显示文字，建议只在“切换后的状态”写一次快捷键。
+  switches/@0/states: [ 中文, "西文 Shift/Caps" ]
+  switches/@1/states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
+  switches/@2/states: [ 🈚表情, "🈶表情 Ctrl+I" ]
+  switches/@3/states: [ 测速关, 测速开 ]
+  switches/@4/states: [ "拆隐", "拆显 Ctrl+J Ctrl+Shift+Enter上屏拆分" ]
+  switches/@5/states: [ 简中, "繁中 Ctrl+O" ]
+  switches/@6/states: [ U区关, "U区开 Ctrl+U" ]
+  switches/@7/states: [ U编关, "U编开 Ctrl+Y" ]
+  switches/@8/states: [ 。，, "．， Ctrl+." ]
+  switches/@9/states: [ 半角, "全角 Shift+Space" ]
 
 
   # 六、空格和常用快捷键
@@ -85,10 +96,8 @@ patch:
     - { accept: "Control+u", toggle: charset_comment_filter, when: composing }  # U 区
     - { accept: "Control+y", toggle: udpf_switch, when: composing }  # U 编码
     - { accept: "Control+j", toggle: chaifen, when: composing }  # 拆分
-    - { accept: Right, send: Down, when: has_menu }  # 右键移动候选焦点
-    - { accept: Left, send: Up, when: has_menu }  # 左键移动候选焦点
     - { accept: "Control+period", toggle: ascii_punct, when: always }  # 中英标点
-    # - { accept: "Shift+space", toggle: full_shape, when: always }  # 全半角
+    - { accept: "Shift+space", toggle: full_shape, when: always }  # 全半角
 
 
   # 七、中英文切换键

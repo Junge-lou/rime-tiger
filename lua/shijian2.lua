@@ -1376,7 +1376,7 @@ end
 -- 公历倒计时(每年)
 local function diffDate2(date1, date2)
   while diffDate(date1, date2) == -1 do
-    date2 = tointeger(date2 + 1000000)
+    date2 = math.floor(date2 + 1000000)
   end
   result = diffDate(date1, date2)
   return result
@@ -1823,15 +1823,24 @@ end
 
 local function nl_shengri2(y, m, d)
   while nl_shengri(y, m, d) == -1 do
-    y = tointeger(y + 1)
+    y = math.floor(y + 1)
   end
   result = nl_shengri(y, m, d)
   return result
 end
 -- 农历倒计时结束
 
+local function command_matches(input, ...)
+  for _, command in ipairs({...}) do
+    if input == "/" .. command or input == "\\" .. command then
+      return true
+    end
+  end
+  return false
+end
+
 local function translator(input, seg)
-  if (input == "/date" or input == "/frq" or input == "/orzh") then
+  if command_matches(input, "date", "frq", "orzh") then
     date = os.date("%Y.%m.%d")
     num_year = os.date("%j/") .. IsLeap(os.date("%Y"))
     candidate = Candidate("date", seg.start, seg._end, date, num_year)
@@ -1874,7 +1883,7 @@ local function translator(input, seg)
     candidate = Candidate("date", seg.start, seg._end, date, "")
     yield(candidate)
 
-  elseif (input == "/cdate" or input == "/fnl" or input == "/wtxs") then
+  elseif command_matches(input, "cdate", "fnl", "wtxs") then
     date = Date2LunarDate(os.date("%Y%m%d")) .. JQtest(os.date("%Y%m%d"))
     candidate = Candidate("date", seg.start, seg._end, date, "")
     yield(candidate)
@@ -1887,7 +1896,7 @@ local function translator(input, seg)
     candidate = Candidate("date", seg.start, seg._end, date, "")
     yield(candidate)
     -- 时间
-  elseif (input == "/time" or input == "/fsj" or input == "/fuj" or input == "/okao") then
+  elseif command_matches(input, "time", "fsj", "fuj", "okao") then
     time = string.gsub(os.date("%H:%M"), "", "")
     time_discrpt = GetLunarSichen(os.date("%H"), 1)
     candidate = Candidate("time", seg.start, seg._end, time, time_discrpt)
@@ -1905,7 +1914,7 @@ local function translator(input, seg)
     candidate = Candidate("time", seg.start, seg._end, time, time_discrpt)
     yield(candidate)
     -- 星期几 周几
-  elseif (input == "/week" or input == "/fxq" or input == "/olzh") then
+  elseif command_matches(input, "week", "fxq", "olzh") then
     weekday = chinese_weekday(os.date("%w"))
     num_weekday = os.date("第%W周")
     candidate = Candidate("xq", seg.start, seg._end, weekday, num_weekday)
@@ -1923,7 +1932,7 @@ local function translator(input, seg)
     candidate = Candidate("xq", seg.start, seg._end, weekday, num_weekday)
     yield(candidate)
     -- 节气 已修复崩溃问题
-  elseif (input == "/fjq" or input == "/lzvq") then
+  elseif command_matches(input, "fjq", "lzvq") then
     local keyword, jqs
     jqs = GetNowTimeJq(os.date("%Y%m%d", os.time() - 3600 * 24 * 15))
     for i, jq in ipairs(jqs) do
@@ -1942,7 +1951,7 @@ local function translator(input, seg)
         end
       end
     end -- if tonumber
-  elseif (input == "/djs") then
+  elseif command_matches(input, "djs") then
     -- 公历倒计时
     sth_y = "1998" -- 公历生日——年
     sth_m = "08" -- 公历生日——月

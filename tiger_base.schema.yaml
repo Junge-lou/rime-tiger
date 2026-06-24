@@ -40,48 +40,46 @@ schema:
 switches: # 0 默认关，1 默认开
   - name: ascii_mode
     reset: 0
-    states: [ 中文, 西文 ]  #中英文状态
+    states: [ 中文, "西文 Shift/Caps" ]  #中英文状态
   - name: pinyin  #拼音滤镜
     reset: 0
-    states: [ "拼", "pīn Ctrl+Shift+Enter上屏拼音" ]
+    states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
   - name: emoji_cn  #emoji滤镜
     reset: 0
-    states: [ 🈚表情, 🈶表情 ]
+    states: [ 🈚表情, "🈶表情 Ctrl+I" ]
+  - name: input_speed_stat #测速统计
+    reset: 0
+    states: [ 测速关, 测速开 ]
   - name: chaifen
     reset: 0
-    states: [ "拆隐", "拆显 Ctrl+Shift+Enter上屏拆分" ]
+    states: [ "拆隐", "拆显 Ctrl+J Ctrl+Shift+Enter上屏拆分" ]
   # - options: [ gb2312, gbk, utf8 ]
   #   states: [ gb2312, GBK, UTF-8 ]
   #   reset: 0
   - name: simplification  #简转繁滤镜
     reset: 0
-    states: [ 简中, 繁中 ]
-  - options: [_keyboard_default, _keyboard_defaultbk, _keyboard_defaultwk]
-    reset: 0
-    states: [ 键显全, 键显半, 键显无 ]
+    states: [ 简中, "繁中 Ctrl+O" ]
   - name: charset_comment_filter  #字符集提示
     reset: 0
-    states: [ U区关, U区开 ]
+    states: [ U区关, "U区开 Ctrl+U" ]
   - name: udpf_switch
     reset: 0
-    states: [ U编关, U编开]
+    states: [ U编关, "U编开 Ctrl+Y" ]
   - name: ascii_punct
     reset: 0
-    states: [ 。，, ．， ]
-  - options: [_keyboard_default, _keyboard_defaultzj]
-    reset: 0
-    states: [ 助记关, 助记开 ]
+    states: [ 。，, "．， Ctrl+." ]
   # - name: fanjian  #繁转简滤镜
   #   reset: 0
   #   states: [ 反繁, 反简 ]
   - name: full_shape
     reset: 0
-    states: [ 半角, 全角 ]
+    states: [ 半角, "全角 Shift+Space" ]
 
 engine:
   processors:
     - ascii_composer
     - recognizer
+    - lua_processor@*input_speed_stat*processor #测速统计开关
     - lua_processor@*space_proc3 #标顶空码不上屏
     - lua_processor@*symbol_proc #候选唯一时符号顶字
     - key_binder
@@ -101,6 +99,7 @@ engine:
   translators:
     - punct_translator
     - lua_translator@symbol_hint_translator #反斜杠符号提示
+    - lua_translator@*input_speed_stat*translator #测速统计
     - reverse_lookup_translator #拼音反查
     - table_translator
     - table_translator@easy_english #临时英文
@@ -192,10 +191,8 @@ key_binder:
     # - { accept: "%", toggle: udpf_switch, when: composing }  #手机 Unicode编码开关
     # - { accept: "+", toggle: udpf_switch, when: composing }  #手机 Unicode编码开关
     # - { when: composing, accept: '"', toggle: chaifen } # 手机 拆分滤镜开关
-    - { when: has_menu, accept: Right, send: Down } # 右方向键 向后移动焦点
-    - { when: has_menu, accept: Left, send: Up } # 左方向键 向前移动焦点
     - { when: always, accept: "Control+period" , toggle: ascii_punct } # 中英标点切换
-    #- { when: always, accept: "Shift+space" , toggle: full_shape } # 全半角切换
+    - { when: always, accept: "Shift+space" , toggle: full_shape } # 全半角切换
 
 recognizer:
   import_preset: default

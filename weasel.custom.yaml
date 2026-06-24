@@ -232,10 +232,10 @@ patch:
   style:
     capture_type: none
     color_font: true
-    comment_font_face: "Consolas, Segoe UI Emoji, Noto Color Emoji, TumanPUA, LXGW WenKai GB Screen, SimSun, SimSun-ExtB, SimSun-ExtG, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16"
+    comment_font_face: "LXGW WenKai GB Screen, Consolas, Segoe UI Emoji, Noto Color Emoji, TumanPUA, SimSun, SimSun-ExtB, SimSun-ExtG, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16"
     comment_font_point: 15
     display_tray_icon: false #显示小狼毫图标 
-    font_face: "Consolas, Segoe UI Emoji, Noto Color Emoji, LXGW WenKai GB Screen, SimSun, SimSun-ExtB, SimSun-ExtG, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16"
+    font_face: "LXGW WenKai GB Screen, Consolas, Segoe UI Emoji, Noto Color Emoji, SimSun, SimSun-ExtB, SimSun-ExtG, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16"
     font_point: 15
     fullscreen: false
     inline_preedit: true

@@ -51,37 +51,31 @@ schema:
 switches:
   - name: ascii_mode
     reset: 0
-    states: [ 中文, 西文 ]  # 中英文状态
+    states: [ 中文, "西文 Shift/Caps" ]  # 中英文状态
   - name: pinyin
     reset: 0
-    states: [ "拼", "pīn Ctrl+Shift+Enter上屏拼音" ]  # 拼音滤镜
+    states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]  # 拼音滤镜
   - name: emoji_cn
     reset: 0
-    states: [ 🈚表情, 🈶表情 ]  # emoji 表情关/开
+    states: [ 🈚表情, "🈶表情 Ctrl+I" ]  # emoji 表情关/开
   - name: chaifen
     reset: 0
-    states: [ "拆隐", "拆显 Ctrl+Shift+Enter上屏拆分" ]  # 拆分提示
+    states: [ "拆隐", "拆显 Ctrl+J Ctrl+Shift+Enter上屏拆分" ]  # 拆分提示
   - name: simplification
     reset: 0
-    states: [ 简中, 繁中 ]  # 简繁切换
+    states: [ 简中, "繁中 Ctrl+O" ]  # 简繁切换
   - name: charset_comment_filter
     reset: 0
-    states: [ U区关, U区开 ]  # Unicode 分区提示
+    states: [ U区关, "U区开 Ctrl+U" ]  # Unicode 分区提示
   - name: udpf_switch
     reset: 0
-    states: [ U编关, U编开 ]  # Unicode 编码提示
+    states: [ U编关, "U编开 Ctrl+Y" ]  # Unicode 编码提示
   - name: ascii_punct
     reset: 0
-    states: [ 。，, ．， ]  # 中英标点
+    states: [ 。，, "．， Ctrl+." ]  # 中英标点
   - name: full_shape
     reset: 0
-    states: [ 半角, 全角 ]  # 全半角
-  - options: [ _keyboard_default, _keyboard_defaultzj ]
-    reset: 0
-    states: [ 助记关, 助记开 ]  # 键盘助记提示关/开
-  - options: [ _keyboard_default, _keyboard_defaultbk, _keyboard_defaultwk ]
-    reset: 0
-    states: [ 键显全, 键显半, 键显无 ]  # 键盘按键提示：全显/半显/隐藏
+    states: [ 半角, "全角 Shift+Space" ]  # 全半角
 
 
 # 四、引擎流程
@@ -259,10 +253,8 @@ key_binder:
     - { accept: "Control+u", toggle: charset_comment_filter, when: composing }  # U 区
     - { accept: "Control+y", toggle: udpf_switch, when: composing }  # U 编码
     - { accept: "Control+j", toggle: chaifen, when: composing }  # 拆分
-    - { accept: Right, send: Down, when: has_menu }  # 右键移动候选焦点
-    - { accept: Left, send: Up, when: has_menu }  # 左键移动候选焦点
     - { accept: "Control+period", toggle: ascii_punct, when: always }  # 中英标点
-    # - { accept: "Shift+space", toggle: full_shape, when: always }  # 全半角
+    - { accept: "Shift+space", toggle: full_shape, when: always }  # 全半角
 
 
 # 十二、识别规则

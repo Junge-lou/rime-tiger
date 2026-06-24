@@ -90,6 +90,7 @@ patch:
   engine/translators:
     - punct_translator
     - lua_translator@symbol_hint_translator #反斜杠符号提示
+    - lua_translator@*input_speed_stat*translator #测速统计
     - reverse_lookup_translator
     - table_translator
     - history_translator@historyDM
