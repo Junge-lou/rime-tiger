@@ -1,3 +1,7 @@
+(function () {
+'use strict';
+
+const appCore = window.RimeSkinCore || null;
 const {
   copySkinToPlatform,
   createBackupManifest,
@@ -13,7 +17,7 @@ const {
   rgbaToRimeHex,
   updateSquirrelConfig,
   updateWeaselConfig,
-} = window.RimeSkinCore;
+} = appCore || {};
 
 const BACKUP_ROOT = 'Rime皮肤编辑器备份';
 const PLATFORM_FILES = {
@@ -90,7 +94,12 @@ const dom = {};
 
 document.addEventListener('DOMContentLoaded', () => {
   bindDom();
-  initialize();
+  try {
+    initialize();
+  } catch (error) {
+    renderStartupError(error);
+    console.error('Rime skin editor startup failed', error);
+  }
 });
 
 function bindDom() {
@@ -140,6 +149,9 @@ function bindDom() {
 }
 
 function initialize() {
+  if (!appCore) {
+    throw new Error('核心脚本加载失败，请确认编辑器文件完整，并从 index.html 打开。');
+  }
   state.capability = detectBrowserCapabilities(window);
   state.preferredPlatform = detectPreferredPlatform(navigator);
   state.selectedPlatform = state.preferredPlatform === 'weasel' ? 'weasel' : 'squirrel';
@@ -197,6 +209,14 @@ function renderCapability() {
   dom.blockedReason.textContent = state.capability.reason;
   dom.blockedPanel.classList.remove('hidden');
   dom.chooseFolderButton.disabled = true;
+}
+
+function renderStartupError(error) {
+  const message = error?.message || '未知启动错误。';
+  if (dom.supportStatus) dom.supportStatus.textContent = `编辑器启动失败：${message}`;
+  if (dom.blockedReason) dom.blockedReason.textContent = message;
+  if (dom.blockedPanel) dom.blockedPanel.classList.remove('hidden');
+  if (dom.chooseFolderButton) dom.chooseFolderButton.disabled = true;
 }
 
 async function chooseFolder() {
@@ -1031,3 +1051,4 @@ function escapeHtml(value) {
 function logMessage(message) {
   dom.messageLog.textContent = `${new Date().toLocaleTimeString()} ${message}\n${dom.messageLog.textContent || ''}`.trim();
 }
+})();
