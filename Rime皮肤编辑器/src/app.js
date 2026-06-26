@@ -20,6 +20,7 @@ const {
 } = appCore || {};
 
 const BACKUP_ROOT = 'Rime皮肤编辑器备份';
+const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const PLATFORM_FILES = {
   squirrel: 'squirrel.custom.yaml',
   weasel: 'weasel.custom.yaml',
@@ -65,6 +66,8 @@ const DEFAULT_COLORS = {
 
 const state = {
   capability: null,
+  storageMode: 'browser',
+  localApiToken: '',
   preferredPlatform: 'unknown',
   dirHandle: null,
   folderName: '',
@@ -92,10 +95,10 @@ const state = {
 
 const dom = {};
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   bindDom();
   try {
-    initialize();
+    await initialize();
   } catch (error) {
     renderStartupError(error);
     console.error('Rime skin editor startup failed', error);
@@ -148,18 +151,23 @@ function bindDom() {
   }
 }
 
-function initialize() {
+async function initialize() {
   if (!appCore) {
     throw new Error('核心脚本加载失败，请确认编辑器文件完整，并从 index.html 打开。');
   }
+  const localSession = detectLocalLauncherSession(window.location);
   state.capability = detectBrowserCapabilities(window);
   state.preferredPlatform = detectPreferredPlatform(navigator);
   state.selectedPlatform = state.preferredPlatform === 'weasel' ? 'weasel' : 'squirrel';
   state.configs.squirrel = emptyConfig('squirrel');
   state.configs.weasel = emptyConfig('weasel');
   populateFontOptions();
-  renderCapability();
   bindEvents();
+  if (localSession) {
+    await initializeLocalLauncher(localSession);
+    return;
+  }
+  renderCapability();
   renderAll();
 }
 
@@ -211,6 +219,28 @@ function renderCapability() {
   dom.chooseFolderButton.disabled = true;
 }
 
+async function initializeLocalLauncher(session) {
+  state.storageMode = 'local';
+  state.localApiToken = session.token;
+  dom.chooseFolderButton.disabled = true;
+  dom.chooseFolderButton.textContent = '已连接本地启动器';
+  dom.supportStatus.textContent = '正在读取本地启动器配置...';
+  const loaded = await loadConfigsFromLocalApi();
+  if (!looksLikeRimeFolder(loaded)) {
+    dom.supportStatus.textContent = '本地启动器已连接，但当前目录不像 Rime 配置目录。';
+    dom.blockedReason.textContent = '请把 Rime皮肤编辑器 文件夹放在 Rime 配置目录里，再双击启动器。';
+    dom.blockedPanel.classList.remove('hidden');
+    return;
+  }
+  applyLoadedConfigs(null, loaded);
+  dom.folderName.textContent = state.folderName;
+  chooseInitialPlatform();
+  await refreshBackups();
+  dom.workspace.classList.remove('hidden');
+  dom.supportStatus.textContent = '本地启动器已连接，可直接编辑当前 Rime 配置目录。';
+  logMessage('已通过本地启动器读取当前配置目录。');
+}
+
 function renderStartupError(error) {
   const message = error?.message || '未知启动错误。';
   if (dom.supportStatus) dom.supportStatus.textContent = `编辑器启动失败：${message}`;
@@ -242,8 +272,32 @@ async function chooseFolder() {
 }
 
 async function loadConfigs() {
-  const loaded = await loadConfigsFromHandle(state.dirHandle);
+  const loaded = state.storageMode === 'local'
+    ? await loadConfigsFromLocalApi()
+    : await loadConfigsFromHandle(state.dirHandle);
   applyLoadedConfigs(state.dirHandle, loaded);
+}
+
+async function loadConfigsFromLocalApi() {
+  const snapshot = await localApi('config');
+  return {
+    folderName: snapshot.folderName || '本地 Rime 配置目录',
+    configs: {
+      squirrel: snapshot.rawFiles?.squirrel ? parseSquirrelConfig(snapshot.rawFiles.squirrel) : emptyConfig('squirrel'),
+      weasel: snapshot.rawFiles?.weasel ? parseWeaselConfig(snapshot.rawFiles.weasel) : emptyConfig('weasel'),
+    },
+    rawFiles: {
+      squirrel: snapshot.rawFiles?.squirrel || '',
+      weasel: snapshot.rawFiles?.weasel || '',
+      default: snapshot.rawFiles?.default || '',
+    },
+    fileExists: {
+      squirrel: Boolean(snapshot.fileExists?.squirrel),
+      weasel: Boolean(snapshot.fileExists?.weasel),
+      default: Boolean(snapshot.fileExists?.default),
+    },
+    hasAnySchemaFile: Boolean(snapshot.hasAnySchemaFile),
+  };
 }
 
 async function loadConfigsFromHandle(dirHandle) {
@@ -300,6 +354,15 @@ async function readOptionalFile(filename, dirHandle = state.dirHandle) {
 }
 
 async function readOptionalFileEntry(filename, dirHandle = state.dirHandle) {
+  if (state.storageMode === 'local') {
+    try {
+      const result = await localApi(`file?path=${encodeURIComponent(filename)}`);
+      return { exists: Boolean(result.exists), text: result.text || '' };
+    } catch (error) {
+      if (error.status === 404) return { exists: false, text: '' };
+      throw error;
+    }
+  }
   try {
     const handle = await dirHandle.getFileHandle(filename);
     const file = await handle.getFile();
@@ -311,6 +374,7 @@ async function readOptionalFileEntry(filename, dirHandle = state.dirHandle) {
 }
 
 async function directoryHasSchemaFile(dirHandle = state.dirHandle) {
+  if (state.storageMode === 'local') return state.hasAnySchemaFile;
   try {
     for await (const [name, handle] of dirHandle.entries()) {
       if (handle.kind === 'file' && name.endsWith('.schema.yaml')) return true;
@@ -400,7 +464,7 @@ function duplicateCurrentSkin() {
 }
 
 async function deleteCurrentSkin() {
-  if (!state.draftSkin || !state.dirHandle) return;
+  if (!state.draftSkin || !hasWritableStorage()) return;
   const config = state.configs[state.selectedPlatform];
   if (state.originalSkinId && state.draftSkin.id !== state.originalSkinId) {
     logMessage('当前皮肤 ID 已改动。请先保存为新皮肤，或重新选择原皮肤后再删除。');
@@ -677,7 +741,7 @@ function setActiveSkin() {
 }
 
 async function saveCurrentSkin() {
-  if (!state.draftSkin || !state.dirHandle) return;
+  if (!state.draftSkin || !hasWritableStorage()) return;
   try {
     const platform = state.selectedPlatform;
     const filename = PLATFORM_FILES[platform];
@@ -743,7 +807,7 @@ async function saveCurrentSkin() {
 }
 
 async function copyCurrentSkin() {
-  if (!state.draftSkin || !state.dirHandle) return;
+  if (!state.draftSkin || !hasWritableStorage()) return;
   const target = state.selectedPlatform === 'squirrel' ? 'weasel' : 'squirrel';
   try {
     const targetFile = PLATFORM_FILES[target];
@@ -791,10 +855,13 @@ async function copyCurrentSkin() {
 }
 
 async function backupFiles(operationSummary, filenames, manifestInput, snapshots = {}) {
-  const root = await state.dirHandle.getDirectoryHandle(BACKUP_ROOT, { create: true });
-  const existingNames = await listDirectoryNames(root);
+  const existingNames = state.storageMode === 'local'
+    ? new Set(state.backups.map((backup) => backup.name))
+    : await listDirectoryNames(await state.dirHandle.getDirectoryHandle(BACKUP_ROOT, { create: true }));
   const folderName = formatBackupFolderName(new Date(), operationSummary, -new Date().getTimezoneOffset(), existingNames);
-  const backupDir = await root.getDirectoryHandle(folderName, { create: true });
+  const backupDir = state.storageMode === 'local'
+    ? { name: folderName }
+    : await (await state.dirHandle.getDirectoryHandle(BACKUP_ROOT, { create: true })).getDirectoryHandle(folderName, { create: true });
   const backedUp = [];
 
   for (const filename of filenames) {
@@ -826,6 +893,19 @@ async function listDirectoryNames(directoryHandle) {
 
 async function refreshBackups() {
   state.backups = [];
+  if (state.storageMode === 'local') {
+    try {
+      const result = await localApi('backups');
+      state.backups = (result.backups || []).map((backup) => ({
+        ...backup,
+        availableFiles: new Set(backup.availableFiles || []),
+      }));
+    } catch (error) {
+      logMessage(`读取备份失败：${error.message}`);
+    }
+    renderBackupList();
+    return;
+  }
   if (!state.dirHandle) {
     renderBackupList();
     return;
@@ -881,9 +961,13 @@ async function rollbackBackup(backup) {
       await writeFile(filename, text);
     }
     for (const filename of plan.filesToDelete) {
-      await state.dirHandle.removeEntry(filename).catch((error) => {
-        if (error?.name !== 'NotFoundError') throw error;
-      });
+      if (state.storageMode === 'local') {
+        await deleteFile(filename);
+      } else {
+        await state.dirHandle.removeEntry(filename).catch((error) => {
+          if (error?.name !== 'NotFoundError') throw error;
+        });
+      }
     }
     await loadConfigs();
     chooseInitialPlatform();
@@ -895,6 +979,13 @@ async function rollbackBackup(backup) {
 }
 
 async function writeFile(filename, text) {
+  if (state.storageMode === 'local') {
+    await localApi('file', {
+      method: 'PUT',
+      body: { path: filename, text },
+    });
+    return;
+  }
   const handle = await state.dirHandle.getFileHandle(filename, { create: true });
   const writable = await handle.createWritable();
   try {
@@ -906,7 +997,26 @@ async function writeFile(filename, text) {
   }
 }
 
+async function deleteFile(filename) {
+  if (state.storageMode === 'local') {
+    await localApi(`file?path=${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    return;
+  }
+  await state.dirHandle.removeEntry(filename);
+}
+
 async function writeFileToDirectory(directoryHandle, filename, text) {
+  if (state.storageMode === 'local') {
+    await localApi('mkdir', {
+      method: 'POST',
+      body: { path: `${BACKUP_ROOT}/${directoryHandle.name}` },
+    });
+    await localApi('file', {
+      method: 'PUT',
+      body: { path: `${BACKUP_ROOT}/${directoryHandle.name}/${filename}`, text },
+    });
+    return;
+  }
   const handle = await directoryHandle.getFileHandle(filename, { create: true });
   const writable = await handle.createWritable();
   try {
@@ -919,6 +1029,10 @@ async function writeFileToDirectory(directoryHandle, filename, text) {
 }
 
 async function readFileFromDirectory(directoryHandle, filename) {
+  if (state.storageMode === 'local') {
+    const result = await localApi(`file?path=${encodeURIComponent(`${BACKUP_ROOT}/${directoryHandle.name}/${filename}`)}`);
+    return result.text || '';
+  }
   const handle = await directoryHandle.getFileHandle(filename);
   const file = await handle.getFile();
   return await file.text();
@@ -988,6 +1102,36 @@ function currentFrontendFiles() {
     if (state.fileExists[platform]) files.add(filename);
   }
   return files;
+}
+
+function hasWritableStorage() {
+  return state.storageMode === 'local' || Boolean(state.dirHandle);
+}
+
+function detectLocalLauncherSession(locationValue) {
+  const locationObject = locationValue || window.location;
+  if (!LOCALHOST_NAMES.has(locationObject.hostname)) return null;
+  const token = new URLSearchParams(locationObject.search || '').get('token') || '';
+  if (!token) return null;
+  return { token };
+}
+
+async function localApi(path, options = {}) {
+  const response = await fetch(`/api/${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      'content-type': 'application/json',
+      'x-rime-editor-token': state.localApiToken,
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || `本地启动器请求失败：${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
 function normalizedLayout(skin) {
