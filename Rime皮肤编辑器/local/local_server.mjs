@@ -1,6 +1,17 @@
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  createReadStream,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
-import { basename, dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -17,7 +28,7 @@ const MIME_TYPES = {
 };
 
 export function resolveAllowedPath(root, requestedPath) {
-  const rootPath = resolve(root);
+  const rootPath = realpathSync(resolve(root));
   const raw = String(requestedPath || '');
   if (!raw || raw.includes('\0') || raw.startsWith('/') || raw.startsWith('\\')) {
     throw new Error('不允许访问这个路径。');
@@ -46,7 +57,37 @@ export function resolveAllowedPath(root, requestedPath) {
   if (relation === '..' || relation.startsWith(`..${sep}`) || resolve(relation) === relation) {
     throw new Error('不允许访问这个路径。');
   }
+  if (isSymbolicLink(target)) {
+    throw new Error('不允许访问这个路径。');
+  }
+  const realParent = existingParentRealPath(dirname(target));
+  if (!realParent || !isInsideRoot(rootPath, realParent)) {
+    throw new Error('不允许访问这个路径。');
+  }
   return target;
+}
+
+function isSymbolicLink(path) {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function existingParentRealPath(path) {
+  let current = path;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+  return realpathSync(current);
+}
+
+function isInsideRoot(rootPath, targetPath) {
+  const relation = relative(rootPath, targetPath);
+  return relation === '' || (!relation.startsWith(`..${sep}`) && relation !== '..' && !isAbsolute(relation));
 }
 
 export function createLocalStore(root) {
@@ -112,10 +153,19 @@ export function listBackups(root) {
         .map((file) => file.name)
         .sort((a, b) => a.localeCompare(b));
       const manifestPath = join(backupDir, 'manifest.json');
-      const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : null;
+      const manifest = readManifest(manifestPath);
       return { name: entry.name, manifest, availableFiles };
     })
     .sort((a, b) => b.name.localeCompare(a.name));
+}
+
+function readManifest(manifestPath) {
+  if (!existsSync(manifestPath)) return null;
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 export function createApp({ root, token, staticRoot = STATIC_ROOT }) {

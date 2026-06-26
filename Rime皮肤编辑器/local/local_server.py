@@ -71,10 +71,19 @@ def list_backups(root):
             continue
         files = sorted(path.name for path in entry.iterdir() if path.is_file())
         manifest_path = entry / 'manifest.json'
-        manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else None
+        manifest = read_manifest(manifest_path)
         backups.append({'name': entry.name, 'manifest': manifest, 'availableFiles': files})
     backups.sort(key=lambda item: item['name'], reverse=True)
     return backups
+
+
+def read_manifest(manifest_path):
+    if not manifest_path.exists():
+        return None
+    try:
+        return json.loads(manifest_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        return None
 
 
 class RimeEditorHandler(BaseHTTPRequestHandler):
@@ -226,7 +235,12 @@ def main():
     print('关闭这个窗口即可停止本地服务。', flush=True)
     if not args.no_open:
         open_url(url)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print('\n已停止本地服务。', flush=True)
+    finally:
+        server.server_close()
 
 
 if __name__ == '__main__':

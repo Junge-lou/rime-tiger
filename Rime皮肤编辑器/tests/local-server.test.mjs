@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,10 +15,11 @@ import {
 test('local store resolves only allowed Rime files and backup paths', () => {
   const root = mkdtempSync(join(tmpdir(), 'rime-editor-store-'));
   try {
-    assert.equal(resolveAllowedPath(root, 'squirrel.custom.yaml'), join(root, 'squirrel.custom.yaml'));
+    const realRoot = realpathSync(root);
+    assert.equal(resolveAllowedPath(root, 'squirrel.custom.yaml'), join(realRoot, 'squirrel.custom.yaml'));
     assert.equal(
       resolveAllowedPath(root, 'Rime皮肤编辑器备份/2026-06-26 保存/manifest.json'),
-      join(root, 'Rime皮肤编辑器备份', '2026-06-26 保存', 'manifest.json'),
+      join(realRoot, 'Rime皮肤编辑器备份', '2026-06-26 保存', 'manifest.json'),
     );
     assert.throws(() => resolveAllowedPath(root, '../squirrel.custom.yaml'), /不允许访问/);
     assert.throws(() => resolveAllowedPath(root, '/tmp/squirrel.custom.yaml'), /不允许访问/);
@@ -26,6 +27,19 @@ test('local store resolves only allowed Rime files and backup paths', () => {
     assert.throws(() => resolveAllowedPath(root, 'Rime皮肤编辑器备份/../squirrel.custom.yaml'), /不允许访问/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('local store rejects allowed-looking symlinks that leave the root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rime-editor-store-'));
+  const outside = mkdtempSync(join(tmpdir(), 'rime-editor-outside-'));
+  try {
+    symlinkSync(join(outside, 'squirrel.custom.yaml'), join(root, 'squirrel.custom.yaml'));
+
+    assert.throws(() => resolveAllowedPath(root, 'squirrel.custom.yaml'), /不允许访问/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
@@ -53,6 +67,31 @@ test('local store reads config snapshot and lists readable backups', () => {
     assert.equal(backups[0].name, '2026-06-26 15-30-12 保存鼠须管-luna');
     assert.deepEqual(backups[0].availableFiles, ['manifest.json', 'squirrel.custom.yaml']);
     assert.equal(backups[0].manifest.operation, 'save');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('local store keeps listing backups when one manifest is malformed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rime-editor-store-'));
+  try {
+    const store = createLocalStore(root);
+    store.mkdir('Rime皮肤编辑器备份/2026-06-26 15-30-12 保存鼠须管-luna');
+    store.mkdir('Rime皮肤编辑器备份/2026-06-26 15-31-12 保存小狼毫-luna');
+    writeFileSync(
+      join(root, 'Rime皮肤编辑器备份', '2026-06-26 15-30-12 保存鼠须管-luna', 'manifest.json'),
+      JSON.stringify({ operation: 'save', files: ['squirrel.custom.yaml'] }),
+    );
+    writeFileSync(
+      join(root, 'Rime皮肤编辑器备份', '2026-06-26 15-31-12 保存小狼毫-luna', 'manifest.json'),
+      '{broken json',
+    );
+
+    const backups = listBackups(root);
+
+    assert.equal(backups.length, 2);
+    assert.equal(backups.find((backup) => backup.name.includes('小狼毫')).manifest, null);
+    assert.equal(backups.find((backup) => backup.name.includes('鼠须管')).manifest.operation, 'save');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

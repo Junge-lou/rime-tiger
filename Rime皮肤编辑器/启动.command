@@ -1,9 +1,9 @@
 #!/bin/zsh
 cd "$(dirname "$0")/.." || exit 1
 
-if [ -x /usr/bin/python3 ]; then
+if [ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
   /usr/bin/python3 "Rime皮肤编辑器/local/local_server.py" --root "$PWD"
-elif command -v python3 >/dev/null 2>&1; then
+elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
   python3 "Rime皮肤编辑器/local/local_server.py" --root "$PWD"
 elif command -v node >/dev/null 2>&1; then
   node "Rime皮肤编辑器/local/local_server.mjs" --root "$PWD"

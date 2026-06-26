@@ -898,6 +898,7 @@ async function refreshBackups() {
       const result = await localApi('backups');
       state.backups = (result.backups || []).map((backup) => ({
         ...backup,
+        handle: { name: backup.name },
         availableFiles: new Set(backup.availableFiles || []),
       }));
     } catch (error) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +52,65 @@ test('python local server exposes token-protected config and file APIs', async (
   } finally {
     if (server) server.kill();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('python local server keeps listing backups when one manifest is malformed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rime-editor-python-'));
+  const valid = join(root, 'Rime皮肤编辑器备份', '2026-06-26 15-30-12 保存鼠须管-luna');
+  const broken = join(root, 'Rime皮肤编辑器备份', '2026-06-26 15-31-12 保存小狼毫-luna');
+  mkdirSync(valid, { recursive: true });
+  mkdirSync(broken, { recursive: true });
+  writeFileSync(join(valid, 'manifest.json'), JSON.stringify({ operation: 'save' }));
+  writeFileSync(join(broken, 'manifest.json'), '{broken json');
+  let server;
+  try {
+    server = spawn('python3', [
+      resolve(editorRoot, 'local/local_server.py'),
+      '--root',
+      root,
+      '--no-open',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await waitForServerUrl(server);
+    const token = new URL(url).searchParams.get('token');
+    const response = await fetch(`${new URL(url).origin}/api/backups`, {
+      headers: { 'x-rime-editor-token': token },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.backups.length, 2);
+    assert.equal(payload.backups.find((backup) => backup.name.includes('小狼毫')).manifest, null);
+    assert.equal(payload.backups.find((backup) => backup.name.includes('鼠须管')).manifest.operation, 'save');
+  } finally {
+    if (server) server.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('python local server rejects allowed-looking symlinks that leave the root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rime-editor-python-'));
+  const outside = mkdtempSync(join(tmpdir(), 'rime-editor-python-outside-'));
+  symlinkSync(join(outside, 'squirrel.custom.yaml'), join(root, 'squirrel.custom.yaml'));
+  let server;
+  try {
+    server = spawn('python3', [
+      resolve(editorRoot, 'local/local_server.py'),
+      '--root',
+      root,
+      '--no-open',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await waitForServerUrl(server);
+    const token = new URL(url).searchParams.get('token');
+    const response = await fetch(`${new URL(url).origin}/api/file?path=squirrel.custom.yaml`, {
+      headers: { 'x-rime-editor-token': token },
+    });
+
+    assert.equal(response.status, 400);
+  } finally {
+    if (server) server.kill();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 

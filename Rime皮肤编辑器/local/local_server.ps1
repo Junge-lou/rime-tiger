@@ -15,13 +15,17 @@ function Resolve-AllowedPath {
   if ([string]::IsNullOrWhiteSpace($RequestedPath) -or $RequestedPath.StartsWith('/') -or $RequestedPath.StartsWith('\') -or $RequestedPath.Contains([char]0)) {
     throw '不允许访问这个路径。'
   }
-  $Parts = $RequestedPath -replace '\\','/' -split '/' | Where-Object { $_ }
+  $Parts = @($RequestedPath -replace '\\','/' -split '/' | Where-Object { $_ })
   if ($Parts -contains '..') { throw '不允许访问这个路径。' }
   $IsFrontendFile = $Parts.Count -eq 1 -and @('squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml') -contains $Parts[0]
   $IsSchemaFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.schema.yaml')
   $IsBackupFile = $Parts.Count -ge 2 -and $Parts[0] -eq $BackupRoot
   if (-not ($IsFrontendFile -or $IsSchemaFile -or $IsBackupFile)) { throw '不允许访问这个路径。' }
-  $Target = [System.IO.Path]::GetFullPath((Join-Path $Root ([System.IO.Path]::Combine($Parts))))
+  $TargetPath = $Root
+  foreach ($Part in $Parts) {
+    $TargetPath = Join-Path $TargetPath $Part
+  }
+  $Target = [System.IO.Path]::GetFullPath($TargetPath)
   $RootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
   if ($Target -ne $RootFull -and -not $Target.StartsWith($RootFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw '不允许访问这个路径。'
@@ -91,10 +95,20 @@ function Get-Backups {
   foreach ($Dir in Get-ChildItem $BackupDir -Directory) {
     $Files = @(Get-ChildItem $Dir.FullName -File | ForEach-Object { $_.Name } | Sort-Object)
     $ManifestPath = Join-Path $Dir.FullName 'manifest.json'
-    $Manifest = if (Test-Path $ManifestPath -PathType Leaf) { Get-Content $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+    $Manifest = Read-Manifest $ManifestPath
     $Items += @{ name = $Dir.Name; manifest = $Manifest; availableFiles = $Files }
   }
   return @($Items | Sort-Object name -Descending)
+}
+
+function Read-Manifest {
+  param([string]$ManifestPath)
+  if (-not (Test-Path $ManifestPath -PathType Leaf)) { return $null }
+  try {
+    return Get-Content $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  } catch {
+    return $null
+  }
 }
 
 $Listener = $null
@@ -103,7 +117,7 @@ $PortsToTry = if ($Port -gt 0) { @($Port) } else { 17890..17920 }
 foreach ($CandidatePort in $PortsToTry) {
   try {
     $Candidate = [System.Net.HttpListener]::new()
-    $Candidate.Prefixes.Add("http://127.0.0.1:$CandidatePort/")
+    $Candidate.Prefixes.Add("http://localhost:$CandidatePort/")
     $Candidate.Start()
     $Listener = $Candidate
     $ActualPort = $CandidatePort
@@ -115,7 +129,7 @@ foreach ($CandidatePort in $PortsToTry) {
 if (-not $Listener) {
   throw '无法启动本地服务：17890-17920 端口都不可用。'
 }
-$Url = "http://127.0.0.1:$ActualPort/?token=$Token"
+$Url = "http://localhost:$ActualPort/?token=$Token"
 Write-Host "Rime 皮肤编辑器已启动：$Url"
 Write-Host "配置目录：$Root"
 Write-Host "关闭这个窗口即可停止本地服务。"

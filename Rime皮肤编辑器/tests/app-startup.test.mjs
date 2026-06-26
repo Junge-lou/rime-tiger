@@ -165,6 +165,133 @@ test('startup detects local launcher mode from tokenized localhost URL', () => {
   });
 });
 
+test('local launcher rollback reads files from named backup directories', () => {
+  const elements = createElementMap([
+    'supportStatus',
+    'chooseFolderButton',
+    'folderName',
+    'blockedPanel',
+    'blockedReason',
+    'workspace',
+    'squirrelTab',
+    'weaselTab',
+    'platformHint',
+    'skinList',
+    'newSkinButton',
+    'duplicateSkinButton',
+    'deleteSkinButton',
+    'previewPlatform',
+    'candidatePreview',
+    'colorControls',
+    'layoutMode',
+    'fontFace',
+    'fontPoint',
+    'fontPointNumber',
+    'fontPointValue',
+    'cornerRadius',
+    'cornerRadiusNumber',
+    'cornerRadiusValue',
+    'candidateSpacing',
+    'candidateSpacingNumber',
+    'candidateSpacingValue',
+    'shadowSize',
+    'shadowSizeNumber',
+    'shadowSizeValue',
+    'displayName',
+    'author',
+    'skinId',
+    'setActiveButton',
+    'saveButton',
+    'copyButton',
+    'reloadBackupsButton',
+    'backupList',
+    'messageLog',
+  ]);
+  addSelectShim(elements.fontFace);
+  const fetchCalls = [];
+  const context = vm.createContext({
+    console: { error() {} },
+    confirm: () => true,
+    fetch(url, options = {}) {
+      fetchCalls.push({ url, options });
+      if (url === '/api/config') {
+        return Promise.resolve(jsonResponse({
+          folderName: 'Rime',
+          rawFiles: {
+            squirrel: 'patch:\n  preset_color_schemes:\n  style:\n    color_scheme: changed\n',
+            weasel: '',
+            default: 'patch:\n',
+          },
+          fileExists: { squirrel: true, weasel: false, default: true },
+          hasAnySchemaFile: false,
+        }));
+      }
+      if (url === '/api/backups') {
+        return Promise.resolve(jsonResponse({
+          backups: [{
+            name: '2026-06-26 15-30-12 保存鼠须管-luna',
+            manifest: {
+              operation: 'save',
+              files: ['squirrel.custom.yaml'],
+              createdFiles: [],
+              sourcePlatform: 'squirrel',
+              skinIdBefore: 'luna',
+              skinIdAfter: 'changed',
+            },
+            availableFiles: ['manifest.json', 'squirrel.custom.yaml'],
+          }],
+        }));
+      }
+      if (url === '/api/file?path=squirrel.custom.yaml') {
+        return Promise.resolve(jsonResponse({ exists: true, text: 'patch:\n  preset_color_schemes:\n  style:\n    color_scheme: changed\n' }));
+      }
+      if (url === '/api/file?path=Rime%E7%9A%AE%E8%82%A4%E7%BC%96%E8%BE%91%E5%99%A8%E5%A4%87%E4%BB%BD%2F2026-06-26%2015-30-12%20%E4%BF%9D%E5%AD%98%E9%BC%A0%E9%A1%BB%E7%AE%A1-luna%2Fsquirrel.custom.yaml') {
+        return Promise.resolve(jsonResponse({ exists: true, text: 'patch:\n  preset_color_schemes:\n  style:\n    color_scheme: luna\n' }));
+      }
+      if (url === '/api/file' && options.method === 'PUT') {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      if (url === '/api/mkdir' && options.method === 'POST') {
+        return Promise.resolve(jsonResponse({ ok: true }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    },
+    document: {
+      listeners: {},
+      createElement(tagName) {
+        return createFakeElement(tagName);
+      },
+      addEventListener(event, handler) {
+        this.listeners[event] ||= [];
+        this.listeners[event].push(handler);
+      },
+      getElementById(id) {
+        return elements[id] || null;
+      },
+    },
+    location: new URL('http://127.0.0.1:17890/?token=abc123'),
+    navigator: { platform: 'MacIntel', userAgent: 'Chrome' },
+    URLSearchParams,
+  });
+  context.window = context;
+
+  const coreSource = readFileSync(resolve(editorRoot, 'src/core.js'), 'utf8');
+  const appSource = readFileSync(resolve(editorRoot, 'src/app.js'), 'utf8');
+  vm.runInContext(coreSource, context, { filename: 'core.js' });
+  vm.runInContext(appSource, context, { filename: 'app.js' });
+
+  return Promise.resolve(context.document.listeners.DOMContentLoaded[0]()).then(async () => {
+    await elements.backupList.children[0].listeners.click[0]();
+  }).then(() => {
+    const restoreWrite = fetchCalls
+      .filter((call) => call.url === '/api/file' && call.options.method === 'PUT')
+      .find((call) => JSON.parse(call.options.body).path === 'squirrel.custom.yaml');
+    assert.ok(restoreWrite);
+    assert.equal(JSON.parse(restoreWrite.options.body).path, 'squirrel.custom.yaml');
+    assert.match(JSON.parse(restoreWrite.options.body).text, /color_scheme: luna/);
+  });
+});
+
 function createElementMap(ids) {
   const elements = {};
   for (const id of ids) {
@@ -201,7 +328,11 @@ function createFakeElement(tagName) {
         this.toggled.push([name, active]);
       },
     },
-    addEventListener() {},
+    listeners: {},
+    addEventListener(event, handler) {
+      this.listeners[event] ||= [];
+      this.listeners[event].push(handler);
+    },
     append(...items) {
       this.children.push(...items);
       if (this.tagName === 'select') this.options.push(...items);
