@@ -4,6 +4,7 @@
 const appCore = window.RimeSkinCore || null;
 const {
   copySkinToPlatform,
+  createSkinPackage,
   createBackupManifest,
   createRollbackPlan,
   detectBrowserCapabilities,
@@ -12,9 +13,13 @@ const {
   deleteWeaselSkinConfig,
   formatBackupFolderName,
   generateSkinId,
+  parseGlobalCustomFiles,
   parseSquirrelConfig,
   parseWeaselConfig,
+  parseSkinPackage,
   rgbaToRimeHex,
+  updateGlobalCustomConfig,
+  updateActiveSkinConfig,
   updateSquirrelConfig,
   updateWeaselConfig,
 } = appCore || {};
@@ -43,26 +48,113 @@ const COLOR_CONTROLS = [
   ['back', '背景'],
   ['border', '边框'],
   ['text', '编码文字'],
+  ['preeditBack', '编码背景'],
   ['candidateText', '候选文字'],
+  ['candidateBack', '候选背景'],
   ['commentText', '注释文字'],
   ['label', '编号'],
+  ['hilitedBack', '编码高亮背景'],
+  ['hilitedText', '编码高亮文字'],
   ['hilitedCandidateBack', '高亮背景'],
   ['hilitedCandidateText', '高亮文字'],
+  ['hilitedLabel', '高亮编号备用'],
+  ['hilitedCandidateLabel', '高亮编号'],
   ['hilitedCommentText', '高亮注释'],
+  ['hilitedMark', '候选标记'],
   ['shadow', '阴影'],
+  ['candidateShadow', '候选文字阴影'],
+  ['hilitedCandidateShadow', '高亮文字阴影'],
 ];
 const DEFAULT_COLORS = {
   back: { r: 255, g: 255, b: 255, a: 255 },
   border: { r: 230, g: 230, b: 230, a: 255 },
   text: { r: 51, g: 51, b: 51, a: 255 },
+  preeditBack: { r: 255, g: 255, b: 255, a: 0 },
   candidateText: { r: 34, g: 34, b: 34, a: 255 },
+  candidateBack: { r: 255, g: 255, b: 255, a: 0 },
   commentText: { r: 102, g: 102, b: 102, a: 255 },
   label: { r: 120, g: 120, b: 120, a: 255 },
+  hilitedBack: { r: 240, g: 240, b: 240, a: 255 },
+  hilitedText: { r: 0, g: 0, b: 0, a: 255 },
   hilitedCandidateBack: { r: 240, g: 240, b: 240, a: 255 },
   hilitedCandidateText: { r: 0, g: 0, b: 0, a: 255 },
+  hilitedLabel: { r: 0, g: 0, b: 0, a: 255 },
+  hilitedCandidateLabel: { r: 0, g: 0, b: 0, a: 255 },
   hilitedCommentText: { r: 80, g: 80, b: 80, a: 255 },
+  hilitedMark: { r: 0, g: 0, b: 0, a: 255 },
   shadow: { r: 0, g: 0, b: 0, a: 32 },
+  candidateShadow: { r: 0, g: 0, b: 0, a: 0 },
+  hilitedCandidateShadow: { r: 0, g: 0, b: 0, a: 0 },
 };
+const NUMBER_STYLE_LABELS = {
+  dot: '%s.',
+  plain: '%s',
+  paren: '%s)',
+  bracket: '[%s]',
+};
+const NUMBER_LABEL_PRESETS = {
+  circledIdeograph: {
+    label: '㊀ ㊁ ㊂',
+    values: ['㊀', '㊁', '㊂', '㊃', '㊄', '㊅', '㊆', '㊇', '㊈', '㊉'],
+  },
+  circledNumber: {
+    label: '① ② ③',
+    values: ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'],
+  },
+  filledCircledNumber: {
+    label: '❶ ❷ ❸',
+    values: ['❶', '❷', '❸', '❹', '❺', '❻', '❼', '❽', '❾', '❿'],
+  },
+  doubleCircledNumber: {
+    label: '⓵ ⓶ ⓷',
+    values: ['⓵', '⓶', '⓷', '⓸', '⓹', '⓺', '⓻', '⓼', '⓽', '⓾'],
+  },
+  parenthesizedIdeograph: {
+    label: '㈠ ㈡ ㈢',
+    values: ['㈠', '㈡', '㈢', '㈣', '㈤', '㈥', '㈦', '㈧', '㈨', '㈩'],
+  },
+  mahjongNumber: {
+    label: '🀇 🀈 🀉',
+    values: ['🀇', '🀈', '🀉', '🀊', '🀋', '🀌', '🀍', '🀎', '🀏', '🀄'],
+  },
+  romanUpper: {
+    label: 'Ⅰ Ⅱ Ⅲ',
+    values: ['Ⅰ', 'Ⅱ', 'Ⅲ', 'Ⅳ', 'Ⅴ', 'Ⅵ', 'Ⅶ', 'Ⅷ', 'Ⅸ', 'Ⅹ'],
+  },
+  romanLower: {
+    label: 'ⅰ ⅱ ⅲ',
+    values: ['ⅰ', 'ⅱ', 'ⅲ', 'ⅳ', 'ⅴ', 'ⅵ', 'ⅶ', 'ⅷ', 'ⅸ', 'ⅹ'],
+  },
+  alphaUpper: {
+    label: 'Ⓐ Ⓑ Ⓒ',
+    values: ['Ⓐ', 'Ⓑ', 'Ⓒ', 'Ⓓ', 'Ⓔ', 'Ⓕ', 'Ⓖ', 'Ⓗ', 'Ⓘ', 'Ⓙ'],
+  },
+  alphaLower: {
+    label: 'ⓐ ⓑ ⓒ',
+    values: ['ⓐ', 'ⓑ', 'ⓒ', 'ⓓ', 'ⓔ', 'ⓕ', 'ⓖ', 'ⓗ', 'ⓘ', 'ⓙ'],
+  },
+};
+const CUSTOM_NUMBER_STYLE = 'customLabels';
+const CUSTOM_SEPARATOR = '__custom_separator__';
+const CUSTOM_MARKER = '__custom_marker__';
+const NUMBER_SEPARATOR_LABELS = {
+  tight: '',
+  normal: ' ',
+  wide: '  ',
+};
+const NUMBER_SEPARATOR_GAPS = {
+  tight: 2,
+  normal: 4,
+  wide: 8,
+};
+const PREVIEW_CANDIDATES = [
+  { label: '1', text: '你好', comment: '常用', active: true },
+  { label: '2', text: '你', comment: '单字' },
+  { label: '3', text: '年', comment: '' },
+  { label: '4', text: '候选文本比较长', comment: '长词' },
+  { label: '5', text: '候選', comment: '异体' },
+];
+const PREVIEW_INPUT_CODE = 'ni hao';
 
 const state = {
   capability: null,
@@ -85,12 +177,19 @@ const state = {
     weasel: '',
     default: '',
   },
+  customFiles: [],
+  globalLayout: {},
+  globalSources: {},
   hasAnySchemaFile: false,
   selectedPlatform: 'squirrel',
   selectedSkinId: '',
   originalSkinId: '',
+  pendingActiveDraft: null,
   draftSkin: null,
+  previewActiveCandidateIndex: 0,
   backups: [],
+  heartbeatTimer: null,
+  closeRequested: false,
 };
 
 const dom = {};
@@ -120,23 +219,82 @@ function bindDom() {
     'newSkinButton',
     'duplicateSkinButton',
     'deleteSkinButton',
+    'importSkinButton',
+    'exportSkinButton',
+    'skinImportFile',
     'previewPlatform',
+    'previewStage',
+    'previewPreedit',
     'candidatePreview',
     'colorControls',
     'layoutMode',
     'fontFace',
+    'labelFontFace',
+    'commentFontFace',
+    'numberStyle',
+    'numberSeparator',
+    'candidateMarker',
+    'preeditVisibility',
     'fontPoint',
     'fontPointNumber',
     'fontPointValue',
+    'labelFontPoint',
+    'labelFontPointNumber',
+    'labelFontPointValue',
+    'commentFontPoint',
+    'commentFontPointNumber',
+    'commentFontPointValue',
     'cornerRadius',
     'cornerRadiusNumber',
     'cornerRadiusValue',
+    'hilitedCornerRadius',
+    'hilitedCornerRadiusNumber',
+    'hilitedCornerRadiusValue',
     'candidateSpacing',
     'candidateSpacingNumber',
     'candidateSpacingValue',
+    'hiliteSpacing',
+    'hiliteSpacingNumber',
+    'hiliteSpacingValue',
+    'lineSpacing',
+    'lineSpacingNumber',
+    'lineSpacingValue',
+    'marginX',
+    'marginXNumber',
+    'marginXValue',
+    'marginY',
+    'marginYNumber',
+    'marginYValue',
+    'borderWidth',
+    'borderWidthNumber',
+    'borderWidthValue',
+    'borderHeight',
+    'borderHeightNumber',
+    'borderHeightValue',
+    'hilitePadding',
+    'hilitePaddingNumber',
+    'hilitePaddingValue',
+    'hilitePaddingX',
+    'hilitePaddingXNumber',
+    'hilitePaddingXValue',
+    'hilitePaddingY',
+    'hilitePaddingYNumber',
+    'hilitePaddingYValue',
+    'minWidth',
+    'minWidthNumber',
+    'minWidthValue',
+    'minHeight',
+    'minHeightNumber',
+    'minHeightValue',
     'shadowSize',
     'shadowSizeNumber',
     'shadowSizeValue',
+    'shadowOffsetX',
+    'shadowOffsetXNumber',
+    'shadowOffsetXValue',
+    'shadowOffsetY',
+    'shadowOffsetYNumber',
+    'shadowOffsetYValue',
     'displayName',
     'author',
     'skinId',
@@ -178,6 +336,9 @@ function bindEvents() {
   dom.newSkinButton.addEventListener('click', createNewSkin);
   dom.duplicateSkinButton.addEventListener('click', duplicateCurrentSkin);
   dom.deleteSkinButton.addEventListener('click', deleteCurrentSkin);
+  dom.importSkinButton.addEventListener('click', () => dom.skinImportFile.click());
+  dom.exportSkinButton.addEventListener('click', exportCurrentSkin);
+  dom.skinImportFile.addEventListener('change', importSkinFromFile);
   dom.setActiveButton.addEventListener('click', setActiveSkin);
   dom.saveButton.addEventListener('click', saveCurrentSkin);
   dom.copyButton.addEventListener('click', copyCurrentSkin);
@@ -188,10 +349,32 @@ function bindEvents() {
   dom.skinId.addEventListener('change', () => updateDraftId(dom.skinId.value));
   dom.layoutMode.addEventListener('change', updateLayoutMode);
   dom.fontFace.addEventListener('change', updateFontFace);
+  dom.labelFontFace.addEventListener('change', () => updateFontSelect('labelFontFace', dom.labelFontFace));
+  dom.commentFontFace.addEventListener('change', () => updateFontSelect('commentFontFace', dom.commentFontFace));
+  dom.numberStyle.addEventListener('change', () => updateNumberFormat('style'));
+  dom.numberSeparator.addEventListener('change', () => updateNumberFormat('separator'));
+  dom.candidateMarker.addEventListener('change', updateCandidateMarker);
+  dom.preeditVisibility.addEventListener('change', updatePreeditVisibility);
   bindRange(dom.fontPoint, dom.fontPointNumber, dom.fontPointValue, 'fontPoint');
+  bindRange(dom.labelFontPoint, dom.labelFontPointNumber, dom.labelFontPointValue, 'labelFontPoint');
+  bindRange(dom.commentFontPoint, dom.commentFontPointNumber, dom.commentFontPointValue, 'commentFontPoint');
   bindRange(dom.cornerRadius, dom.cornerRadiusNumber, dom.cornerRadiusValue, 'cornerRadius');
+  bindRange(dom.hilitedCornerRadius, dom.hilitedCornerRadiusNumber, dom.hilitedCornerRadiusValue, 'hilitedCornerRadius');
   bindRange(dom.candidateSpacing, dom.candidateSpacingNumber, dom.candidateSpacingValue, 'candidateSpacing');
+  bindRange(dom.hiliteSpacing, dom.hiliteSpacingNumber, dom.hiliteSpacingValue, 'hiliteSpacing');
+  bindRange(dom.lineSpacing, dom.lineSpacingNumber, dom.lineSpacingValue, 'lineSpacing');
+  bindRange(dom.marginX, dom.marginXNumber, dom.marginXValue, 'marginX');
+  bindRange(dom.marginY, dom.marginYNumber, dom.marginYValue, 'marginY');
+  bindRange(dom.borderWidth, dom.borderWidthNumber, dom.borderWidthValue, 'borderWidth');
+  bindRange(dom.borderHeight, dom.borderHeightNumber, dom.borderHeightValue, 'borderHeight');
+  bindRange(dom.hilitePadding, dom.hilitePaddingNumber, dom.hilitePaddingValue, 'hilitePadding');
+  bindRange(dom.hilitePaddingX, dom.hilitePaddingXNumber, dom.hilitePaddingXValue, 'hilitePaddingX');
+  bindRange(dom.hilitePaddingY, dom.hilitePaddingYNumber, dom.hilitePaddingYValue, 'hilitePaddingY');
+  bindRange(dom.minWidth, dom.minWidthNumber, dom.minWidthValue, 'minWidth');
+  bindRange(dom.minHeight, dom.minHeightNumber, dom.minHeightValue, 'minHeight');
   bindRange(dom.shadowSize, dom.shadowSizeNumber, dom.shadowSizeValue, 'shadowSize');
+  bindRange(dom.shadowOffsetX, dom.shadowOffsetXNumber, dom.shadowOffsetXValue, 'shadowOffsetX');
+  bindRange(dom.shadowOffsetY, dom.shadowOffsetYNumber, dom.shadowOffsetYValue, 'shadowOffsetY');
 }
 
 function bindRange(rangeInput, numberInput, output, field) {
@@ -238,6 +421,7 @@ async function initializeLocalLauncher(session) {
   await refreshBackups();
   dom.workspace.classList.remove('hidden');
   dom.supportStatus.textContent = '本地启动器已连接，可直接编辑当前 Rime 配置目录。';
+  startLocalLauncherHeartbeat();
   logMessage('已通过本地启动器读取当前配置目录。');
 }
 
@@ -280,17 +464,29 @@ async function loadConfigs() {
 
 async function loadConfigsFromLocalApi() {
   const snapshot = await localApi('config');
+  const customFiles = snapshot.customFiles || [];
+  const global = parseGlobalCustomFiles(globalCustomFilesForParse(customFiles, snapshot.rawFiles?.default || ''));
   return {
     folderName: snapshot.folderName || '本地 Rime 配置目录',
+    rootPath: snapshot.rootPath || '',
     configs: {
-      squirrel: snapshot.rawFiles?.squirrel ? parseSquirrelConfig(snapshot.rawFiles.squirrel) : emptyConfig('squirrel'),
-      weasel: snapshot.rawFiles?.weasel ? parseWeaselConfig(snapshot.rawFiles.weasel) : emptyConfig('weasel'),
+      squirrel: mergeGlobalLayoutIntoConfig(
+        snapshot.rawFiles?.squirrel ? parseSquirrelConfig(snapshot.rawFiles.squirrel) : emptyConfig('squirrel'),
+        global.layout,
+      ),
+      weasel: mergeGlobalLayoutIntoConfig(
+        snapshot.rawFiles?.weasel ? parseWeaselConfig(snapshot.rawFiles.weasel) : emptyConfig('weasel'),
+        global.layout,
+      ),
     },
     rawFiles: {
       squirrel: snapshot.rawFiles?.squirrel || '',
       weasel: snapshot.rawFiles?.weasel || '',
       default: snapshot.rawFiles?.default || '',
     },
+    customFiles,
+    globalLayout: global.layout,
+    globalSources: global.sources,
     fileExists: {
       squirrel: Boolean(snapshot.fileExists?.squirrel),
       weasel: Boolean(snapshot.fileExists?.weasel),
@@ -306,6 +502,9 @@ async function loadConfigsFromHandle(dirHandle) {
     configs: {},
     rawFiles: {},
     fileExists: {},
+    customFiles: [],
+    globalLayout: {},
+    globalSources: {},
     hasAnySchemaFile: false,
   };
   for (const platform of Object.keys(PLATFORM_FILES)) {
@@ -319,22 +518,73 @@ async function loadConfigsFromHandle(dirHandle) {
   const defaultEntry = await readOptionalFileEntry('default.custom.yaml', dirHandle);
   loaded.fileExists.default = defaultEntry.exists;
   loaded.rawFiles.default = defaultEntry.text;
+  loaded.customFiles = await readRootCustomFiles(dirHandle);
+  const global = parseGlobalCustomFiles(globalCustomFilesForParse(loaded.customFiles, loaded.rawFiles.default));
+  loaded.globalLayout = global.layout;
+  loaded.globalSources = global.sources;
+  loaded.configs.squirrel = mergeGlobalLayoutIntoConfig(loaded.configs.squirrel, loaded.globalLayout);
+  loaded.configs.weasel = mergeGlobalLayoutIntoConfig(loaded.configs.weasel, loaded.globalLayout);
   loaded.hasAnySchemaFile = await directoryHasSchemaFile(dirHandle);
   return loaded;
 }
 
 function applyLoadedConfigs(dirHandle, loaded) {
   state.dirHandle = dirHandle;
-  state.folderName = loaded.folderName;
+  state.folderName = loaded.rootPath || loaded.folderName;
   state.configs.squirrel = loaded.configs.squirrel;
   state.configs.weasel = loaded.configs.weasel;
   state.rawFiles.squirrel = loaded.rawFiles.squirrel;
   state.rawFiles.weasel = loaded.rawFiles.weasel;
   state.rawFiles.default = loaded.rawFiles.default;
+  state.customFiles = loaded.customFiles || [];
+  state.globalLayout = loaded.globalLayout || {};
+  state.globalSources = loaded.globalSources || {};
   state.fileExists.squirrel = loaded.fileExists.squirrel;
   state.fileExists.weasel = loaded.fileExists.weasel;
   state.fileExists.default = loaded.fileExists.default;
   state.hasAnySchemaFile = loaded.hasAnySchemaFile;
+}
+
+function globalCustomFilesForParse(customFiles = state.customFiles, defaultText = state.rawFiles.default) {
+  const files = [...(customFiles || [])];
+  if (defaultText) files.push({ name: 'default.custom.yaml', text: defaultText });
+  return files;
+}
+
+async function readRootCustomFiles(dirHandle) {
+  const files = [];
+  try {
+    for await (const [name, handle] of dirHandle.entries()) {
+      if (
+        handle.kind !== 'file' ||
+        !name.endsWith('.custom.yaml') ||
+        Object.values(PLATFORM_FILES).includes(name) ||
+        name === 'default.custom.yaml'
+      ) {
+        continue;
+      }
+      const file = await handle.getFile();
+      files.push({ name, text: await file.text() });
+    }
+  } catch (error) {
+    logMessage(`扫描全局 custom 配置失败：${error.message}`);
+  }
+  return files.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function mergeGlobalLayoutIntoConfig(config, globalLayout = {}) {
+  const labels = globalLayout.alternativeSelectLabels;
+  if (!Array.isArray(labels) || !labels.length) return config;
+  return {
+    ...config,
+    skins: config.skins.map((skin) => ({
+      ...skin,
+      layout: {
+        alternativeSelectLabels: labels,
+        ...(skin.layout || {}),
+      },
+    })),
+  };
 }
 
 function chooseInitialPlatform() {
@@ -393,7 +643,7 @@ async function readAndValidateFrontendFile(platform) {
   const filename = PLATFORM_FILES[platform];
   const entry = await readOptionalFileEntry(filename);
   if (!entry.exists) return { exists: false, text: '', config: emptyConfig(platform) };
-  const config = parseConfig(platform, entry.text);
+  const config = mergeGlobalLayoutIntoConfig(parseConfig(platform, entry.text), state.globalLayout);
   return { exists: true, text: entry.text, config };
 }
 
@@ -428,7 +678,11 @@ function selectSkin(id) {
   const skin = config.skins.find((item) => item.id === id) || config.skins[0] || null;
   state.selectedSkinId = skin?.id || '';
   state.originalSkinId = skin?.id || '';
+  state.pendingActiveDraft = null;
   state.draftSkin = skin ? cloneSkin(skin) : null;
+  state.previewActiveCandidateIndex = 0;
+  rememberGlobalLayoutSources();
+  rememberOriginalLayout();
   renderAll();
 }
 
@@ -444,8 +698,11 @@ function createNewSkin() {
     layout: defaultLayoutForPlatform(state.selectedPlatform),
     unsupportedFields: {},
   };
+  rememberGlobalLayoutSources();
   state.selectedSkinId = id;
   state.originalSkinId = '';
+  state.pendingActiveDraft = null;
+  state.previewActiveCandidateIndex = 0;
   renderAll();
 }
 
@@ -460,7 +717,53 @@ function duplicateCurrentSkin() {
   };
   state.selectedSkinId = id;
   state.originalSkinId = '';
+  state.pendingActiveDraft = null;
+  state.previewActiveCandidateIndex = 0;
+  rememberGlobalLayoutSources();
   renderAll();
+}
+
+function exportCurrentSkin() {
+  if (!state.draftSkin) return;
+  try {
+    const packageText = createSkinPackage(state.draftSkin, {
+      sourcePlatform: state.selectedPlatform,
+    });
+    const filename = `${state.draftSkin.id || 'rime-skin'}.rime-skin.json`;
+    downloadTextFile(filename, packageText);
+    logMessage(`已导出皮肤包：${filename}`);
+  } catch (error) {
+    logMessage(`导出失败：${error.message}`);
+  }
+}
+
+async function importSkinFromFile() {
+  const file = dom.skinImportFile.files?.[0];
+  dom.skinImportFile.value = '';
+  if (!file) return;
+  try {
+    const packageText = await file.text();
+    const skinPackage = parseSkinPackage(packageText);
+    const sourceSkin = skinPackage.skin;
+    const imported = sourceSkin.platform && sourceSkin.platform !== state.selectedPlatform
+      ? copySkinToPlatform(sourceSkin, state.selectedPlatform)
+      : cloneSkin({ ...sourceSkin, platform: state.selectedPlatform });
+    const config = state.configs[state.selectedPlatform];
+    imported.id = generateSkinId(imported.id || imported.displayName, config.skins.map((skin) => skin.id));
+    imported.displayName ||= imported.id;
+    imported.unsupportedFields ||= {};
+    state.draftSkin = imported;
+    state.selectedSkinId = imported.id;
+    state.originalSkinId = '';
+    state.pendingActiveDraft = null;
+    state.previewActiveCandidateIndex = 0;
+    rememberGlobalLayoutSources();
+    rememberOriginalLayout();
+    renderAll();
+    logMessage(`已导入皮肤包：${imported.displayName}。预览确认后可保存。`);
+  } catch (error) {
+    logMessage(`导入失败：${error.message}`);
+  }
 }
 
 async function deleteCurrentSkin() {
@@ -476,6 +779,7 @@ async function deleteCurrentSkin() {
     state.draftSkin = null;
     state.selectedSkinId = '';
     state.originalSkinId = '';
+    state.pendingActiveDraft = null;
     selectSkin(config.activeSkinId || config.skins[0]?.id || '');
     logMessage('已丢弃未保存的皮肤草稿。');
     return;
@@ -503,7 +807,7 @@ async function deleteCurrentSkin() {
     const written = await readOptionalFileEntry(filename);
     if (!written.exists) throw new Error(`删除后无法重新读取 ${filename}`);
     state.rawFiles[platform] = written.text;
-    state.configs[platform] = parseConfig(platform, written.text);
+    state.configs[platform] = mergeGlobalLayoutIntoConfig(parseConfig(platform, written.text), state.globalLayout);
     const next = state.configs[platform].activeSkinId || state.configs[platform].skins[0]?.id || '';
     await refreshBackups();
     selectSkin(next);
@@ -567,22 +871,62 @@ function renderEditor() {
     dom.skinId,
     dom.layoutMode,
     dom.fontFace,
+    dom.labelFontFace,
+    dom.commentFontFace,
+    dom.numberStyle,
+    dom.numberSeparator,
+    dom.candidateMarker,
+    dom.preeditVisibility,
     dom.fontPoint,
     dom.fontPointNumber,
+    dom.labelFontPoint,
+    dom.labelFontPointNumber,
+    dom.commentFontPoint,
+    dom.commentFontPointNumber,
     dom.cornerRadius,
     dom.cornerRadiusNumber,
+    dom.hilitedCornerRadius,
+    dom.hilitedCornerRadiusNumber,
     dom.candidateSpacing,
     dom.candidateSpacingNumber,
+    dom.hiliteSpacing,
+    dom.hiliteSpacingNumber,
+    dom.lineSpacing,
+    dom.lineSpacingNumber,
+    dom.marginX,
+    dom.marginXNumber,
+    dom.marginY,
+    dom.marginYNumber,
+    dom.borderWidth,
+    dom.borderWidthNumber,
+    dom.borderHeight,
+    dom.borderHeightNumber,
+    dom.hilitePadding,
+    dom.hilitePaddingNumber,
+    dom.hilitePaddingX,
+    dom.hilitePaddingXNumber,
+    dom.hilitePaddingY,
+    dom.hilitePaddingYNumber,
+    dom.minWidth,
+    dom.minWidthNumber,
+    dom.minHeight,
+    dom.minHeightNumber,
     dom.shadowSize,
     dom.shadowSizeNumber,
+    dom.shadowOffsetX,
+    dom.shadowOffsetXNumber,
+    dom.shadowOffsetY,
+    dom.shadowOffsetYNumber,
     dom.setActiveButton,
     dom.saveButton,
     dom.copyButton,
     dom.duplicateSkinButton,
+    dom.exportSkinButton,
   ]) {
     element.disabled = disabled;
   }
   dom.deleteSkinButton.disabled = !canDelete;
+  dom.importSkinButton.disabled = false;
   const target = state.selectedPlatform === 'squirrel' ? 'weasel' : 'squirrel';
   dom.copyButton.textContent = `复制到${PLATFORM_LABELS[target]}`;
   dom.colorControls.replaceChildren();
@@ -596,10 +940,32 @@ function renderEditor() {
   const layout = normalizedLayout(skin);
   dom.layoutMode.value = layout.mode;
   syncSelect(dom.fontFace, layout.fontFace);
+  syncSelect(dom.labelFontFace, layout.labelFontFace);
+  syncSelect(dom.commentFontFace, layout.commentFontFace);
+  syncSelect(dom.numberStyle, layout.numberStyle, numberStyleOptionLabel(layout));
+  syncSelect(dom.numberSeparator, layout.numberSeparator, numberSeparatorOptionLabel(layout));
+  syncSelect(dom.candidateMarker, layout.markText);
+  dom.preeditVisibility.value = layout.preeditVisibility;
   setRange(dom.fontPoint, dom.fontPointNumber, dom.fontPointValue, layout.fontPoint);
+  setRange(dom.labelFontPoint, dom.labelFontPointNumber, dom.labelFontPointValue, layout.labelFontPoint);
+  setRange(dom.commentFontPoint, dom.commentFontPointNumber, dom.commentFontPointValue, layout.commentFontPoint);
   setRange(dom.cornerRadius, dom.cornerRadiusNumber, dom.cornerRadiusValue, layout.cornerRadius);
+  setRange(dom.hilitedCornerRadius, dom.hilitedCornerRadiusNumber, dom.hilitedCornerRadiusValue, layout.hilitedCornerRadius);
   setRange(dom.candidateSpacing, dom.candidateSpacingNumber, dom.candidateSpacingValue, layout.candidateSpacing);
+  setRange(dom.hiliteSpacing, dom.hiliteSpacingNumber, dom.hiliteSpacingValue, layout.hiliteSpacing);
+  setRange(dom.lineSpacing, dom.lineSpacingNumber, dom.lineSpacingValue, layout.lineSpacing);
+  setRange(dom.marginX, dom.marginXNumber, dom.marginXValue, layout.marginX);
+  setRange(dom.marginY, dom.marginYNumber, dom.marginYValue, layout.marginY);
+  setRange(dom.borderWidth, dom.borderWidthNumber, dom.borderWidthValue, layout.borderWidth);
+  setRange(dom.borderHeight, dom.borderHeightNumber, dom.borderHeightValue, layout.borderHeight);
+  setRange(dom.hilitePadding, dom.hilitePaddingNumber, dom.hilitePaddingValue, layout.hilitePadding);
+  setRange(dom.hilitePaddingX, dom.hilitePaddingXNumber, dom.hilitePaddingXValue, layout.hilitePaddingX);
+  setRange(dom.hilitePaddingY, dom.hilitePaddingYNumber, dom.hilitePaddingYValue, layout.hilitePaddingY);
+  setRange(dom.minWidth, dom.minWidthNumber, dom.minWidthValue, layout.minWidth);
+  setRange(dom.minHeight, dom.minHeightNumber, dom.minHeightValue, layout.minHeight);
   setRange(dom.shadowSize, dom.shadowSizeNumber, dom.shadowSizeValue, layout.shadowSize);
+  setRange(dom.shadowOffsetX, dom.shadowOffsetXNumber, dom.shadowOffsetXValue, layout.shadowOffsetX);
+  setRange(dom.shadowOffsetY, dom.shadowOffsetYNumber, dom.shadowOffsetYValue, layout.shadowOffsetY);
 
   for (const [role, label] of COLOR_CONTROLS) {
     const wrapper = document.createElement('label');
@@ -617,30 +983,42 @@ function renderEditor() {
 function renderPreview() {
   const skin = state.draftSkin;
   if (!skin) return;
-  const colors = { ...DEFAULT_COLORS, ...(skin.colors || {}) };
+  const colors = colorsForPreview(skin.colors || {});
   const layout = normalizedLayout(skin);
   const preview = dom.candidatePreview;
-  const row = preview.querySelector('.candidate-row');
-  const active = preview.querySelector('.candidate.active');
-  const candidates = preview.querySelectorAll('.candidate:not(.active)');
-  const comment = preview.querySelector('.comment');
-  const preedit = preview.querySelector('.preedit');
+  const preedit = dom.previewPreedit;
+  const row = preview.querySelector('.candidate-row') || document.createElement('div');
+  if (!row.parentElement && !preview.children?.includes?.(row)) preview.append(row);
+
+  dom.previewStage.style.fontFamily = layout.fontFace;
+  dom.previewStage.style.fontSize = `${layout.fontPoint}px`;
+
+  preedit.textContent = preeditTextForLayout(layout);
+  preedit.hidden = !shouldShowPreedit(layout);
+  preedit.style.color = rgbaToCss(colorRole(colors, 'text'));
+  preedit.style.backgroundColor = rgbaToCss(colorRole(colors, 'preeditBack'));
+  preedit.style.fontFamily = layout.fontFace;
+  preedit.style.fontSize = `${layout.fontPoint}px`;
+  preedit.style.textDecorationColor = rgbaToCss(colorRole(colors, 'text'));
 
   preview.style.backgroundColor = rgbaToCss(colors.back);
   preview.style.borderColor = rgbaToCss(colors.border || colors.back);
+  preview.style.borderStyle = 'solid';
+  preview.style.borderWidth = '0';
   preview.style.borderRadius = `${layout.cornerRadius}px`;
   preview.style.fontFamily = layout.fontFace;
   preview.style.fontSize = `${layout.fontPoint}px`;
-  preview.style.boxShadow = layout.shadowSize
-    ? `0 ${Math.max(4, layout.shadowSize)}px ${layout.shadowSize * 2}px ${rgbaToCss(colors.shadow)}`
-    : 'none';
-  preedit.style.color = rgbaToCss(colors.text);
+  preview.style.padding = `${layout.marginY}px ${layout.marginX}px`;
+  preview.style.minWidth = `${layout.minWidth}px`;
+  preview.style.minHeight = `${layout.minHeight}px`;
+  preview.style.boxShadow = previewBoxShadow(layout, colors);
   row.classList.toggle('stacked', layout.mode === 'stacked');
-  row.style.gap = `${layout.candidateSpacing}px`;
-  active.style.backgroundColor = rgbaToCss(colors.hilitedCandidateBack);
-  active.style.color = rgbaToCss(colors.hilitedCandidateText);
-  for (const item of candidates) item.style.color = rgbaToCss(colors.candidateText);
-  comment.style.color = rgbaToCss(colors.commentText);
+  row.classList.toggle('linear', layout.mode === 'linear');
+  row.style.display = layout.mode === 'stacked' ? 'grid' : 'flex';
+  row.style.gridTemplateColumns = layout.mode === 'stacked' ? '1fr' : '';
+  row.style.columnGap = `${layout.candidateSpacing}px`;
+  row.style.rowGap = `${layout.lineSpacing}px`;
+  row.replaceChildren(...previewNodes(layout, colors));
 }
 
 function renderBackupList() {
@@ -653,17 +1031,28 @@ function renderBackupList() {
     return;
   }
   for (const backup of state.backups) {
-    const button = document.createElement('button');
-    button.className = 'backup-item';
+    const item = document.createElement('div');
+    item.className = 'backup-item';
     const summary = manifestSummary(backup.manifest);
     const backupFiles = [
       ...(backup.manifest?.files || []),
       ...(backup.manifest?.createdFiles || []).map((file) => `${file}（新建）`),
     ];
     const files = backupFiles.join(', ') || '未知文件';
-    button.innerHTML = `<span class="skin-title">${escapeHtml(backup.name)}</span><span class="backup-meta">${escapeHtml(summary)} · ${escapeHtml(files)}</span>`;
-    button.addEventListener('click', () => rollbackBackup(backup));
-    dom.backupList.append(button);
+    const body = document.createElement('button');
+    body.className = 'backup-restore';
+    body.innerHTML = `<span class="skin-title">${escapeHtml(backup.name)}</span><span class="backup-meta">${escapeHtml(summary)} · ${escapeHtml(files)}</span>`;
+    body.addEventListener('click', () => rollbackBackup(backup));
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'backup-delete';
+    deleteButton.type = 'button';
+    deleteButton.textContent = '删除';
+    deleteButton.addEventListener('click', async (event) => {
+      event.stopPropagation?.();
+      await deleteBackupEntry(backup);
+    });
+    item.append(body, deleteButton);
+    dom.backupList.append(item);
   }
 }
 
@@ -680,6 +1069,12 @@ function updateDraftId(value) {
   state.draftSkin.id = safe;
   dom.skinId.value = safe;
   state.selectedSkinId = safe;
+  if (state.pendingActiveDraft === state.draftSkin) {
+    state.configs[state.selectedPlatform].activeSkinId = safe;
+    if (state.selectedPlatform === 'squirrel') {
+      state.configs[state.selectedPlatform].darkSkinId = safe;
+    }
+  }
   renderSkinList();
 }
 
@@ -694,17 +1089,145 @@ function updateLayoutMode() {
   renderPreview();
 }
 
+function updateNumberFormat(source = 'all') {
+  if (!state.draftSkin) return;
+  state.draftSkin.layout ||= {};
+  let numberStyle = dom.numberStyle.value;
+  let separatorStyle = dom.numberSeparator.value;
+  if (numberStyle === CUSTOM_NUMBER_STYLE) {
+    if (source === 'style' || !normalizeLabelList(state.draftSkin.layout.alternativeSelectLabels).length) {
+      const current = normalizeLabelList(state.draftSkin.layout.alternativeSelectLabels);
+      const value = window.prompt('输入候选编号，用空格、逗号或顿号分隔。', current.join(' '));
+      if (value === null || value === undefined || value === '') {
+        syncSelect(dom.numberStyle, numberStyleFromLayout(state.draftSkin.layout), numberStyleOptionLabel(normalizedLayout(state.draftSkin)));
+        return;
+      }
+      const labels = parseCustomList(value);
+      if (!labels.length) {
+        syncSelect(dom.numberStyle, numberStyleFromLayout(state.draftSkin.layout), numberStyleOptionLabel(normalizedLayout(state.draftSkin)));
+        return;
+      }
+      state.draftSkin.layout.alternativeSelectLabels = labels;
+    }
+  } else if (NUMBER_LABEL_PRESETS[numberStyle]) {
+    state.draftSkin.layout.alternativeSelectLabels = [...NUMBER_LABEL_PRESETS[numberStyle].values];
+  } else {
+    delete state.draftSkin.layout.alternativeSelectLabels;
+  }
+
+  if (separatorStyle === CUSTOM_SEPARATOR && (source === 'separator' || state.draftSkin.layout.customNumberSeparator === undefined)) {
+    const current = separatorFromLayout(state.draftSkin.layout);
+    const value = window.prompt('输入编号和候选之间的间隔，可以直接输入空格或符号。', current);
+    if (value === null || value === undefined) {
+      syncSelect(dom.numberSeparator, candidateSeparatorFromLayout(state.draftSkin.layout), numberSeparatorOptionLabel(normalizedLayout(state.draftSkin)));
+      return;
+    }
+    state.draftSkin.layout.customNumberSeparator = value;
+  } else {
+    delete state.draftSkin.layout.customNumberSeparator;
+  }
+
+  const labelFormat = NUMBER_STYLE_LABELS[numberStyle] || NUMBER_STYLE_LABELS.dot;
+  const separator = separatorStyle === CUSTOM_SEPARATOR
+    ? state.draftSkin.layout.customNumberSeparator || ''
+    : NUMBER_SEPARATOR_LABELS[separatorStyle] ?? NUMBER_SEPARATOR_LABELS.normal;
+  state.draftSkin.layout.numberSeparator = separatorStyle;
+  if (state.selectedPlatform === 'squirrel') {
+    state.draftSkin.layout.candidateFormat = `${labelFormat.replace(/%s/g, '%c')}${separator}%@`;
+    delete state.draftSkin.layout.labelFormat;
+  } else {
+    state.draftSkin.layout.labelFormat = `${labelFormat}${separator}`;
+  }
+  if (numberStyle === CUSTOM_NUMBER_STYLE) {
+    syncSelect(dom.numberStyle, CUSTOM_NUMBER_STYLE, numberStyleOptionLabel(normalizedLayout(state.draftSkin)));
+  }
+  if (separatorStyle === CUSTOM_SEPARATOR) {
+    syncSelect(dom.numberSeparator, CUSTOM_SEPARATOR, numberSeparatorOptionLabel(normalizedLayout(state.draftSkin)));
+  }
+  renderPreview();
+}
+
+function updateCandidateMarker() {
+  if (!state.draftSkin) return;
+  state.draftSkin.layout ||= {};
+  if (dom.candidateMarker.value === CUSTOM_MARKER) {
+    const current = state.draftSkin.layout.markText || '';
+    const value = window.prompt('输入候选标记。', current);
+    if (value === null || value === undefined) {
+      syncSelect(dom.candidateMarker, current);
+      return;
+    }
+    state.draftSkin.layout.markText = value;
+    syncSelect(dom.candidateMarker, value || '');
+  } else {
+    state.draftSkin.layout.markText = dom.candidateMarker.value;
+  }
+  renderPreview();
+}
+
+function updatePreeditVisibility() {
+  if (!state.draftSkin) return;
+  state.draftSkin.layout ||= {};
+  const value = dom.preeditVisibility.value;
+  if (value === 'auto') {
+    delete state.draftSkin.layout.previewPreedit;
+    restoreOriginalLayoutField('inlinePreedit');
+  } else {
+    state.draftSkin.layout.previewPreedit = value;
+    state.draftSkin.layout.inlinePreedit = value === 'hide';
+  }
+  renderPreview();
+}
+
 function updateDraftLayout(field, value) {
   if (!state.draftSkin) return;
   state.draftSkin.layout ||= {};
-  state.draftSkin.layout[field] = value;
+  if (field === 'shadowSize') {
+    state.draftSkin.layout.shadowRadius = value;
+    delete state.draftSkin.layout.shadowSize;
+  } else if (field === 'hilitePadding') {
+    state.draftSkin.layout.hilitePadding = value;
+    state.draftSkin.layout.hilitePaddingX = value;
+    state.draftSkin.layout.hilitePaddingY = value;
+  } else if (field === 'candidateSpacing' && state.selectedPlatform === 'squirrel') {
+    state.draftSkin.layout.candidateSpacing = value;
+    state.draftSkin.layout.spacing = value;
+  } else {
+    state.draftSkin.layout[field] = value;
+  }
   renderPreview();
+}
+
+function rememberOriginalLayout() {
+  if (!state.draftSkin) return;
+  state.draftSkin.originalLayout = cloneJson(state.draftSkin.layout || {});
+}
+
+function rememberGlobalLayoutSources() {
+  if (!state.draftSkin) return;
+  state.draftSkin.globalSources = cloneJson(state.globalSources || {});
+  state.draftSkin.originalGlobalLayout = cloneJson(state.globalLayout || {});
+}
+
+function restoreOriginalLayoutField(field) {
+  const original = state.draftSkin?.originalLayout || {};
+  if (Object.prototype.hasOwnProperty.call(original, field)) {
+    state.draftSkin.layout[field] = original[field];
+  } else {
+    delete state.draftSkin.layout[field];
+  }
 }
 
 function updateDraftColor(role, color) {
   if (!state.draftSkin) return;
   state.draftSkin.colors ||= {};
-  state.draftSkin.colors[role] = color;
+  const hasExplicitColor = Boolean(state.draftSkin.colors[role]);
+  const previousAlpha = state.draftSkin.colors[role]?.a;
+  const defaultAlpha = DEFAULT_COLORS[role]?.a;
+  state.draftSkin.colors[role] = {
+    ...color,
+    a: hasExplicitColor ? previousAlpha : defaultAlpha === 0 ? 255 : (defaultAlpha ?? color.a ?? 255),
+  };
   renderPreview();
 }
 
@@ -736,6 +1259,10 @@ function manifestSummary(manifest) {
 function setActiveSkin() {
   if (!state.draftSkin) return;
   state.configs[state.selectedPlatform].activeSkinId = state.draftSkin.id;
+  if (state.selectedPlatform === 'squirrel') {
+    state.configs[state.selectedPlatform].darkSkinId = state.draftSkin.id;
+  }
+  state.pendingActiveDraft = state.draftSkin;
   logMessage(`已设为当前皮肤。保存后请重新部署 Rime。`);
   renderSkinList();
 }
@@ -767,10 +1294,17 @@ async function saveCurrentSkin() {
       if (resolution === 'cancel') return;
       if (resolution === 'new') state.draftSkin.id = generateSkinId(state.draftSkin.id, config.skins.map((skin) => skin.id));
     }
+    const userRequestedActive = state.pendingActiveDraft === state.draftSkin;
     const makeActive = Boolean(
-      (!state.originalSkinId && !config.activeSkinId) ||
+      userRequestedActive ||
+        (!state.originalSkinId && !config.activeSkinId) ||
         config.activeSkinId === state.draftSkin.id ||
         (state.originalSkinId && config.activeSkinId === state.originalSkinId),
+    );
+    const makeDark = platform === 'squirrel' && Boolean(
+      userRequestedActive ||
+        config.darkSkinId === state.draftSkin.id ||
+        (state.originalSkinId && config.darkSkinId === state.originalSkinId),
     );
     const operation = `保存${PLATFORM_LABELS[platform]}-${state.draftSkin.id}`;
     const fileExists = current.exists;
@@ -778,32 +1312,106 @@ async function saveCurrentSkin() {
       const createFile = window.confirm(`未找到 ${filename}。是否创建这个前端配置文件并保存皮肤？`);
       if (!createFile) return;
     }
+    const frontendLabels = labelsFromCustomPatchText(filename, existingText);
+    const shouldSyncFrontendLabels = frontendLabels.length > 0;
+    const currentLabels = normalizeLabelList(state.draftSkin.layout?.alternativeSelectLabels);
+    const globalWrite = shouldSyncFrontendLabels && currentLabels.length
+      ? null
+      : await prepareGlobalLayoutWrite(state.draftSkin);
+    const activeOnly = shouldSaveActiveOnly({
+      platform,
+      config,
+      current,
+      globalWrite,
+      userRequestedActive,
+    });
+    if (activeOnly) {
+      const output = updateActiveSkinConfig(existingText, platform, state.draftSkin.id, {
+        makeDark: platform === 'squirrel',
+      });
+      await writeFile(filename, output);
+      const written = await readOptionalFileEntry(filename);
+      if (!written.exists) throw new Error(`保存后无法重新读取 ${filename}`);
+      state.fileExists[platform] = true;
+      state.rawFiles[platform] = written.text;
+      state.configs[platform] = mergeGlobalLayoutIntoConfig(parseConfig(platform, written.text), state.globalLayout);
+      state.selectedSkinId = state.draftSkin.id;
+      state.pendingActiveDraft = null;
+      selectSkin(state.selectedSkinId);
+      logMessage('已切换当前皮肤。请重新部署 Rime。');
+      return;
+    }
+    const filesToBackup = [filename, ...(globalWrite ? [globalWrite.filename] : [])];
+    const backupSnapshots = { [filename]: current };
+    if (globalWrite) backupSnapshots[globalWrite.filename] = globalWrite.current;
 
-    await backupFiles(operation, [filename], {
+    await backupFiles(operation, filesToBackup, {
       operation: 'save',
       sourcePlatform: platform,
       targetPlatform: '',
       skinIdBefore: state.originalSkinId || config.activeSkinId,
       skinIdAfter: state.draftSkin.id,
-      createdFiles: fileExists ? [] : [filename],
-    }, { [filename]: current });
+      createdFiles: [
+        ...(fileExists ? [] : [filename]),
+        ...(globalWrite && !globalWrite.current.exists ? [globalWrite.filename] : []),
+      ],
+    }, backupSnapshots);
 
+    const frontendWriteOptions = shouldSyncFrontendLabels
+      ? { alternativeSelectLabels: currentLabels }
+      : {};
     const output = platform === 'squirrel'
-      ? updateSquirrelConfig(existingText, state.draftSkin, { makeActive })
-      : updateWeaselConfig(existingText, state.draftSkin, { makeActive });
+      ? updateSquirrelConfig(existingText, state.draftSkin, { makeActive, makeDark, ...frontendWriteOptions })
+      : updateWeaselConfig(existingText, state.draftSkin, { makeActive, ...frontendWriteOptions });
     await writeFile(filename, output);
+    if (globalWrite) await writeFile(globalWrite.filename, globalWrite.output);
     const written = await readOptionalFileEntry(filename);
     if (!written.exists) throw new Error(`保存后无法重新读取 ${filename}`);
     state.fileExists[platform] = true;
     state.rawFiles[platform] = written.text;
-    state.configs[platform] = parseConfig(platform, written.text);
+    if (globalWrite) {
+      const savedGlobal = await readOptionalFileEntry(globalWrite.filename);
+      if (globalWrite.filename === 'default.custom.yaml') {
+        state.rawFiles.default = savedGlobal.text;
+        state.fileExists.default = true;
+      } else {
+        upsertCustomFileState(globalWrite.filename, savedGlobal.text);
+      }
+      const global = parseGlobalCustomFiles(globalCustomFilesForParse());
+      state.globalLayout = global.layout;
+      state.globalSources = global.sources;
+    }
+    state.configs[platform] = mergeGlobalLayoutIntoConfig(parseConfig(platform, written.text), state.globalLayout);
     state.selectedSkinId = state.draftSkin.id;
+    state.pendingActiveDraft = null;
     await refreshBackups();
     selectSkin(state.selectedSkinId);
     logMessage('已保存并备份。请重新部署 Rime。');
   } catch (error) {
     logMessage(`保存失败：${error.message}`);
   }
+}
+
+function shouldSaveActiveOnly({ platform, config, current, globalWrite, userRequestedActive }) {
+  if (!userRequestedActive || !current.exists || globalWrite || !state.originalSkinId) return false;
+  if (!state.draftSkin || state.draftSkin.id !== state.originalSkinId) return false;
+  const persisted = config.skins.find((skin) => skin.id === state.originalSkinId);
+  if (!persisted) return false;
+  const expectedActive = state.draftSkin.id;
+  if (config.activeSkinId === expectedActive && (platform !== 'squirrel' || config.darkSkinId === expectedActive)) {
+    return false;
+  }
+  const cleanDraft = comparableSkin(state.draftSkin);
+  const cleanPersisted = comparableSkin(persisted);
+  return JSON.stringify(cleanDraft) === JSON.stringify(cleanPersisted);
+}
+
+function comparableSkin(skin) {
+  const copy = cloneSkin(skin);
+  delete copy.originalLayout;
+  delete copy.originalGlobalLayout;
+  delete copy.globalSources;
+  return copy;
 }
 
 async function copyCurrentSkin() {
@@ -845,13 +1453,75 @@ async function copyCurrentSkin() {
     if (!written.exists) throw new Error(`复制后无法重新读取 ${targetFile}`);
     state.fileExists[target] = true;
     state.rawFiles[target] = written.text;
-    state.configs[target] = parseConfig(target, written.text);
+    state.configs[target] = mergeGlobalLayoutIntoConfig(parseConfig(target, written.text), state.globalLayout);
     await refreshBackups();
     logMessage(`已复制到${PLATFORM_LABELS[target]}，请重新部署 Rime。`);
     renderAll();
   } catch (error) {
     logMessage(`复制失败：${error.message}`);
   }
+}
+
+async function prepareGlobalLayoutWrite(skin) {
+  const layout = skin.layout || {};
+  const original = skin.originalGlobalLayout || {};
+  const currentLabels = normalizeLabelList(layout.alternativeSelectLabels);
+  const originalLabels = normalizeLabelList(original.alternativeSelectLabels);
+  if (labelListsEqual(currentLabels, originalLabels)) return null;
+
+  const filename = skin.globalSources?.alternativeSelectLabels ||
+    state.globalSources.alternativeSelectLabels ||
+    'default.custom.yaml';
+  const current = await readOptionalFileEntry(filename);
+  const output = updateGlobalCustomConfig(current.exists ? current.text : 'patch:\n', {
+    alternativeSelectLabels: currentLabels,
+  });
+  return { filename, current, output };
+}
+
+function labelsFromCustomPatchText(filename, text) {
+  try {
+    const parsed = parseGlobalCustomFiles([{ name: filename, text }]);
+    return normalizeLabelList(parsed.layout.alternativeSelectLabels);
+  } catch {
+    return [];
+  }
+}
+
+function upsertCustomFileState(filename, text) {
+  if (Object.values(PLATFORM_FILES).includes(filename) || filename === 'default.custom.yaml') return;
+  const existing = state.customFiles.find((file) => file.name === filename);
+  if (existing) {
+    existing.text = text;
+  } else {
+    state.customFiles.push({ name: filename, text });
+    state.customFiles.sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
+function normalizeLabelList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+}
+
+function labelListsEqual(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function matchingNumberLabelPreset(labels) {
+  const normalized = normalizeLabelList(labels);
+  if (!normalized.length) return '';
+  for (const [key, preset] of Object.entries(NUMBER_LABEL_PRESETS)) {
+    const presetValues = preset.values;
+    if (
+      normalized.length <= presetValues.length &&
+      normalized.every((value, index) => value === presetValues[index])
+    ) {
+      return key;
+    }
+  }
+  return '';
 }
 
 async function backupFiles(operationSummary, filenames, manifestInput, snapshots = {}) {
@@ -979,6 +1649,24 @@ async function rollbackBackup(backup) {
   }
 }
 
+async function deleteBackupEntry(backup) {
+  if (!backup?.name || !hasWritableStorage()) return;
+  const confirmed = window.confirm(`确认删除这个备份？\n${backup.name}`);
+  if (!confirmed) return;
+  try {
+    if (state.storageMode === 'local') {
+      await localApi(`backup?name=${encodeURIComponent(backup.name)}`, { method: 'DELETE' });
+    } else {
+      const root = await state.dirHandle.getDirectoryHandle(BACKUP_ROOT);
+      await root.removeEntry(backup.name, { recursive: true });
+    }
+    await refreshBackups();
+    logMessage('已删除备份。');
+  } catch (error) {
+    logMessage(`删除备份失败：${error.message}`);
+  }
+}
+
 async function writeFile(filename, text) {
   if (state.storageMode === 'local') {
     await localApi('file', {
@@ -1045,24 +1733,30 @@ function minimalConfigText(platform) {
 }
 
 function populateFontOptions() {
-  dom.fontFace.replaceChildren();
+  for (const select of [dom.fontFace, dom.labelFontFace, dom.commentFontFace]) {
+    populateOneFontSelect(select);
+  }
+}
+
+function populateOneFontSelect(select) {
+  select.replaceChildren();
   for (const font of COMMON_FONTS) {
     const option = document.createElement('option');
     option.value = font;
     option.textContent = font;
-    dom.fontFace.append(option);
+    select.append(option);
   }
   const custom = document.createElement('option');
   custom.value = '__custom_font__';
   custom.textContent = '自定义字体...';
-  dom.fontFace.append(custom);
+  select.append(custom);
 }
 
-function syncSelect(select, value) {
+function syncSelect(select, value, label = value) {
   if (value && ![...select.options].some((option) => option.value === value)) {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = value;
+    option.textContent = label || value;
     select.prepend(option);
   }
   select.value = value || select.options[0]?.value || '';
@@ -1081,20 +1775,31 @@ function clampNumber(value, min, max) {
 }
 
 function updateFontFace() {
+  updateFontSelect('fontFace', dom.fontFace);
+}
+
+function updateFontSelect(field, select) {
   if (!state.draftSkin) return;
-  if (dom.fontFace.value !== '__custom_font__') {
-    updateDraftLayout('fontFace', dom.fontFace.value);
+  if (select.value !== '__custom_font__') {
+    updateDraftLayout(field, select.value);
     return;
   }
-  const current = state.draftSkin.layout?.fontFace || '';
+  const current = state.draftSkin.layout?.[field] || state.draftSkin.layout?.fontFace || '';
   const value = window.prompt('输入字体名称，多个字体可用逗号分隔。', current);
   if (!value) {
-    syncSelect(dom.fontFace, current);
+    syncSelect(select, current);
     return;
   }
   const trimmed = value.trim();
-  syncSelect(dom.fontFace, trimmed);
-  updateDraftLayout('fontFace', trimmed);
+  syncSelect(select, trimmed);
+  updateDraftLayout(field, trimmed);
+}
+
+function parseCustomList(value) {
+  return String(value || '')
+    .split(/[\s,，、]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function currentFrontendFiles() {
@@ -1117,6 +1822,39 @@ function detectLocalLauncherSession(locationValue) {
   return { token };
 }
 
+function startLocalLauncherHeartbeat() {
+  if (state.heartbeatTimer) return;
+  const ping = () => {
+    Promise.resolve()
+      .then(() => fetch('/api/ping', {
+        method: 'POST',
+        headers: { 'x-rime-editor-token': state.localApiToken },
+      }))
+      .catch(() => {});
+  };
+  ping();
+  if (typeof setInterval === 'function') {
+    state.heartbeatTimer = setInterval(ping, 10000);
+  }
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', requestLocalLauncherClose);
+    window.addEventListener('beforeunload', requestLocalLauncherClose);
+  }
+}
+
+function requestLocalLauncherClose() {
+  if (state.storageMode !== 'local' || state.closeRequested) return;
+  state.closeRequested = true;
+  if (state.heartbeatTimer) {
+    clearInterval(state.heartbeatTimer);
+    state.heartbeatTimer = null;
+  }
+  fetch(`/api/close?token=${encodeURIComponent(state.localApiToken)}`, {
+    method: 'POST',
+    keepalive: true,
+  }).catch(() => {});
+}
+
 async function localApi(path, options = {}) {
   const response = await fetch(`/api/${path}`, {
     method: options.method || 'GET',
@@ -1135,24 +1873,404 @@ async function localApi(path, options = {}) {
   return data;
 }
 
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body?.append?.(link);
+  link.click();
+  link.remove?.();
+  URL.revokeObjectURL(url);
+}
+
+function previewNodes(layout, colors) {
+  return PREVIEW_CANDIDATES.map((item, index) => createCandidateNode(item, layout, colors, index));
+}
+
+function colorsForPreview(skinColors = {}) {
+  return {
+    ...DEFAULT_COLORS,
+    __explicitHilitedMark: Object.prototype.hasOwnProperty.call(skinColors, 'hilitedMark'),
+    hilitedCandidateBack: skinColors.hilitedCandidateBack || skinColors.hilitedBack || DEFAULT_COLORS.hilitedCandidateBack,
+    hilitedCandidateText: skinColors.hilitedCandidateText || skinColors.hilitedText || DEFAULT_COLORS.hilitedCandidateText,
+    hilitedCandidateLabel: skinColors.hilitedCandidateLabel || skinColors.hilitedLabel || DEFAULT_COLORS.hilitedCandidateLabel,
+    hilitedCommentText: skinColors.hilitedCommentText || skinColors.hilitedCandidateText || skinColors.hilitedText || DEFAULT_COLORS.hilitedCommentText,
+    hilitedMark: skinColors.hilitedMark || skinColors.hilitedCandidateLabel || skinColors.hilitedLabel || DEFAULT_COLORS.hilitedMark,
+    ...skinColors,
+  };
+}
+
+function createCandidateNode(item, layout, colors, index) {
+  const active = index === state.previewActiveCandidateIndex;
+  const candidate = document.createElement('span');
+  const classes = ['candidate'];
+  if (active) classes.push('active');
+  if (!item.comment) classes.push('no-comment');
+  if (String(item.text || '').length > 6) classes.push('long');
+  candidate.className = classes.join(' ');
+  const textMarker = String(layout.markText || '');
+  const hilitedMarkColor = colorRole(colors, 'hilitedMark', 'hilitedCandidateLabel', 'hilitedLabel', 'label');
+  const hasWin11Marker = !textMarker && colors.__explicitHilitedMark && colorIsVisible(hilitedMarkColor);
+  const showWin11MarkerSlot = hasWin11Marker && (active || layout.mode === 'stacked');
+  const showWin11Marker = hasWin11Marker && active;
+  const showTextMarkerSlot = Boolean(textMarker && (active || layout.mode === 'stacked'));
+  const showMarkerSlot = showTextMarkerSlot || showWin11MarkerSlot;
+  candidate.style.display = layout.mode === 'stacked' ? 'grid' : 'inline-grid';
+  candidate.style.gridTemplateColumns = candidateGridColumns(showMarkerSlot);
+  candidate.style.width = layout.mode === 'stacked' ? '100%' : '';
+  candidate.style.boxSizing = 'border-box';
+  candidate.style.alignItems = 'baseline';
+  candidate.style.fontFamily = layout.fontFace;
+  candidate.style.fontSize = `${layout.fontPoint}px`;
+  candidate.style.backgroundColor = rgbaToCss(active
+    ? colorRole(colors, 'hilitedCandidateBack', 'hilitedBack')
+    : colorRole(colors, 'candidateBack'));
+  candidate.style.color = rgbaToCss(active
+    ? colorRole(colors, 'hilitedCandidateText', 'hilitedText', 'candidateText')
+    : colorRole(colors, 'candidateText'));
+  candidate.style.borderRadius = `${active ? layout.hilitedCornerRadius : Math.min(layout.hilitedCornerRadius, layout.cornerRadius)}px`;
+  const blockPadding = layout.hilitePaddingY;
+  const inlinePadding = layout.hilitePaddingX;
+  candidate.style.padding = `${cssLength(blockPadding)} ${cssLength(inlinePadding)}`;
+  candidate.style.paddingLeft = cssLength(inlinePadding);
+  candidate.style.paddingRight = cssLength(inlinePadding);
+  candidate.style.columnGap = `${candidateInnerGap(layout)}px`;
+  candidate.style.textShadow = textShadowForColor(active
+    ? colorRole(colors, 'hilitedCandidateShadow')
+    : colorRole(colors, 'candidateShadow'));
+  candidate.style.cursor = 'pointer';
+  candidate.addEventListener('click', () => {
+    state.previewActiveCandidateIndex = index;
+    renderPreview();
+  });
+
+  const mark = document.createElement('span');
+  mark.className = 'candidate-mark';
+  if (showWin11MarkerSlot) {
+    mark.className = 'candidate-mark win11-mark';
+    mark.textContent = '';
+    mark.style.visibility = active ? 'visible' : 'hidden';
+    mark.style.backgroundColor = rgbaToCss(hilitedMarkColor);
+    mark.style.borderRadius = `${layout.hilitedCornerRadius}px`;
+    mark.style.display = 'inline-block';
+    mark.style.alignSelf = 'center';
+    mark.style.minWidth = markerMinWidth(layout);
+    mark.style.width = markerMinWidth(layout);
+    mark.style.height = win11MarkerHeight(layout);
+    mark.style.padding = '0';
+  } else {
+    mark.textContent = textMarker;
+    mark.style.visibility = active ? 'visible' : 'hidden';
+    mark.style.color = rgbaToCss(active
+      ? hilitedMarkColor
+      : colorRole(colors, 'label'));
+    mark.style.backgroundColor = '';
+    mark.style.borderRadius = '';
+    mark.style.display = 'inline';
+    mark.style.alignItems = '';
+    mark.style.justifyContent = '';
+    mark.style.alignSelf = '';
+    mark.style.minWidth = '';
+    mark.style.padding = '';
+  }
+
+  const label = document.createElement('span');
+  label.className = 'candidate-label';
+  label.textContent = formatCandidateLabel(labelForCandidate(item, layout, index), layout);
+  label.style.color = rgbaToCss(active
+    ? colorRole(colors, 'hilitedCandidateLabel', 'hilitedLabel', 'hilitedCandidateText', 'hilitedText')
+    : colorRole(colors, 'label'));
+  label.style.fontFamily = layout.labelFontFace || layout.fontFace;
+  label.style.fontSize = `${layout.labelFontPoint}px`;
+
+  const text = document.createElement('span');
+  text.className = 'candidate-text';
+  text.textContent = item.text;
+  text.style.color = rgbaToCss(active
+    ? colorRole(colors, 'hilitedCandidateText', 'hilitedText', 'candidateText')
+    : colorRole(colors, 'candidateText'));
+
+  const comment = document.createElement('span');
+  comment.className = 'candidate-comment';
+  comment.textContent = item.comment;
+  comment.style.color = rgbaToCss(active
+    ? colorRole(colors, 'hilitedCommentText', 'hilitedCandidateText', 'hilitedText')
+    : colorRole(colors, 'commentText'));
+  comment.style.fontFamily = layout.commentFontFace || layout.fontFace;
+  comment.style.fontSize = `${layout.commentFontPoint}px`;
+
+  if (showMarkerSlot) candidate.append(mark);
+  candidate.append(label, text, comment);
+  return candidate;
+}
+
+function candidateGridColumns(showMarkerSlot) {
+  return showMarkerSlot
+    ? 'max-content max-content minmax(0, max-content) max-content'
+    : 'max-content minmax(0, max-content) max-content';
+}
+
+function candidateInnerGap(layout) {
+  return Math.max(layout.labelGap, layout.hiliteSpacing);
+}
+
+function markerMinWidth(layout) {
+  return `${Math.max(4, Math.round(layout.fontPoint * 0.28))}px`;
+}
+
+function win11MarkerHeight(layout) {
+  return `${Math.max(10, Math.round(layout.fontPoint * 0.78))}px`;
+}
+
+function cssLength(value) {
+  const numeric = Number(value) || 0;
+  return numeric === 0 ? '0' : `${numeric}px`;
+}
+
+function colorIsVisible(color) {
+  return Boolean(color && (color.a ?? 255) > 0);
+}
+
+function colorRole(colors, ...roles) {
+  for (const role of roles) {
+    if (colors[role]) return colors[role];
+  }
+  return DEFAULT_COLORS[roles[0]] || DEFAULT_COLORS.text;
+}
+
+function textShadowForColor(color) {
+  if (!color || (color.a ?? 0) === 0) return 'none';
+  return `0 1px 1px ${rgbaToCss(color)}`;
+}
+
+function shouldShowPreedit(layout) {
+  if (layout.previewPreedit === 'show') return true;
+  if (layout.previewPreedit === 'hide') return false;
+  return layout.inlinePreedit === false;
+}
+
+function preeditTextForLayout(layout) {
+  if (layout.preeditType === 'preview') return PREVIEW_CANDIDATES[0].text;
+  if (layout.preeditType === 'preview_all') {
+    return PREVIEW_CANDIDATES.map((item) => item.text).join(' ');
+  }
+  return PREVIEW_INPUT_CODE;
+}
+
+function labelForCandidate(item, layout, index) {
+  const labels = normalizeLabelList(layout.alternativeSelectLabels);
+  return labels[index] || item.label;
+}
+
+function formatCandidateLabel(label, layout) {
+  return labelFormatFromLayout(layout).replace(/%s/g, label).trimEnd();
+}
+
+function labelFormatFromLayout(layout) {
+  if (layout.candidateFormat) {
+    const beforeCandidate = layout.candidateFormat.includes('%@')
+      ? layout.candidateFormat.split('%@')[0]
+      : layout.candidateFormat;
+    return beforeCandidate.replace(/%c/g, '%s').trimEnd();
+  }
+  if (layout.labelFormat) return layout.labelFormat;
+  return '%s.';
+}
+
+function candidateSeparatorFromLayout(layout) {
+  if (layout.numberSeparator) return layout.numberSeparator;
+  if (layout.customNumberSeparator !== undefined) return CUSTOM_SEPARATOR;
+  const separator = labelSeparatorFromLayout(layout);
+  if (separator === null) return 'normal';
+  if (separator === '  ') return 'wide';
+  if (separator === ' ') return 'normal';
+  if (separator === '') return 'tight';
+  return CUSTOM_SEPARATOR;
+}
+
+function numberStyleFromLayout(layout) {
+  const labelPreset = matchingNumberLabelPreset(layout.alternativeSelectLabels);
+  if (labelPreset) return labelPreset;
+  if (normalizeLabelList(layout.alternativeSelectLabels).length) return CUSTOM_NUMBER_STYLE;
+  const format = labelFormatCoreFromLayout(layout);
+  if (format === '%s') return 'plain';
+  if (format === '%s)') return 'paren';
+  if (format === '[%s]') return 'bracket';
+  if (format === '%s.') return 'dot';
+  return 'dot';
+}
+
+function separatorFromLayout(layout) {
+  if (layout.customNumberSeparator !== undefined) return layout.customNumberSeparator;
+  const separator = labelSeparatorFromLayout(layout);
+  if (separator !== null && !['', ' ', '  '].includes(separator)) return separator;
+  const separatorStyle = candidateSeparatorFromLayout(layout);
+  if (separatorStyle === CUSTOM_SEPARATOR) return layout.customNumberSeparator || '';
+  return NUMBER_SEPARATOR_LABELS[separatorStyle] ?? NUMBER_SEPARATOR_LABELS.normal;
+}
+
+function labelFormatCoreFromLayout(layout) {
+  const format = labelFormatFromLayout(layout);
+  for (const styleFormat of Object.values(NUMBER_STYLE_LABELS)) {
+    if (format === styleFormat || format.startsWith(styleFormat)) return styleFormat;
+  }
+  return format.trimEnd();
+}
+
+function labelSeparatorFromLayout(layout) {
+  if (layout.labelFormat) {
+    return separatorAfterKnownFormat(String(layout.labelFormat), '%s');
+  }
+  if (!layout.candidateFormat || !layout.candidateFormat.includes('%@')) return null;
+  const beforeCandidate = layout.candidateFormat.split('%@')[0];
+  return separatorAfterKnownFormat(beforeCandidate.replace(/%c/g, '%s'), '%s');
+}
+
+function separatorAfterKnownFormat(format, placeholder) {
+  const candidates = Object.values(NUMBER_STYLE_LABELS)
+    .map((value) => value.replace(/%s/g, placeholder))
+    .sort((left, right) => right.length - left.length);
+  for (const candidate of candidates) {
+    if (format.startsWith(candidate)) return format.slice(candidate.length);
+  }
+  const placeholderIndex = format.indexOf(placeholder);
+  if (placeholderIndex < 0) return '';
+  return format.slice(placeholderIndex + placeholder.length);
+}
+
+function gapForSeparator(layout) {
+  const separatorStyle = candidateSeparatorFromLayout(layout);
+  if (separatorStyle !== CUSTOM_SEPARATOR) {
+    return NUMBER_SEPARATOR_GAPS[separatorStyle] ?? NUMBER_SEPARATOR_GAPS.normal;
+  }
+  const separator = separatorFromLayout(layout);
+  return Math.max(2, Math.min(24, separator.length * 4));
+}
+
+function numberStyleOptionLabel(layout) {
+  const labels = normalizeLabelList(layout.alternativeSelectLabels);
+  if (!labels.length) return '';
+  const preset = matchingNumberLabelPreset(labels);
+  if (preset) return NUMBER_LABEL_PRESETS[preset].label;
+  return `自定义：${labels.slice(0, 3).join(' ')}`;
+}
+
+function previewBoxShadow(layout, colors) {
+  const shadows = [];
+  const borderColor = rgbaToCss(colors.border || colors.back);
+  const horizontal = Number(layout.borderWidth) || 0;
+  const vertical = Number(layout.borderHeight) || 0;
+  if (horizontal > 0) {
+    shadows.push(`inset ${horizontal}px 0 0 ${borderColor}`);
+    shadows.push(`inset -${horizontal}px 0 0 ${borderColor}`);
+  }
+  if (vertical > 0) {
+    shadows.push(`inset 0 ${vertical}px 0 ${borderColor}`);
+    shadows.push(`inset 0 -${vertical}px 0 ${borderColor}`);
+  }
+  if (layout.shadowSize) {
+    shadows.push(`${layout.shadowOffsetX}px ${layout.shadowOffsetY}px ${layout.shadowSize}px ${rgbaToCss(colors.shadow)}`);
+  }
+  return shadows.length ? shadows.join(', ') : 'none';
+}
+
+function numberSeparatorOptionLabel(layout) {
+  if (layout.numberSeparator !== CUSTOM_SEPARATOR && layout.customNumberSeparator === undefined) return '';
+  const separator = separatorFromLayout(layout);
+  return separator ? `自定义：${separator.replace(/ /g, '空格')}` : '自定义：无间隔';
+}
+
 function normalizedLayout(skin) {
   const layout = skin.layout || {};
+  const fontPoint = layout.fontPoint || 16;
   return {
     mode: state.selectedPlatform === 'squirrel'
       ? layout.candidateListLayout || 'stacked'
       : layout.horizontal ? 'linear' : 'stacked',
     fontFace: layout.fontFace || COMMON_FONTS[0],
-    fontPoint: layout.fontPoint || 16,
+    fontPoint,
+    labelFontFace: layout.labelFontFace || layout.fontFace || COMMON_FONTS[0],
+    labelFontPoint: layout.labelFontPoint || fontPoint,
+    commentFontFace: layout.commentFontFace || layout.fontFace || COMMON_FONTS[0],
+    commentFontPoint: layout.commentFontPoint || fontPoint,
+    labelFormat: layout.labelFormat || '',
+    candidateFormat: layout.candidateFormat || '',
+    alternativeSelectLabels: normalizeLabelList(layout.alternativeSelectLabels),
+    customNumberSeparator: layout.customNumberSeparator,
+    numberStyle: numberStyleFromLayout(layout),
+    numberSeparator: candidateSeparatorFromLayout(layout),
+    labelGap: gapForSeparator(layout),
+    markText: layout.markText || '',
+    inlinePreedit: layout.inlinePreedit,
+    preeditType: layout.preeditType || '',
+    previewPreedit: layout.previewPreedit || 'auto',
+    preeditVisibility: layout.previewPreedit || 'auto',
     cornerRadius: layout.cornerRadius ?? 6,
+    hilitedCornerRadius: layout.hilitedCornerRadius ?? layout.cornerRadius ?? 6,
+    marginX: layout.marginX ?? 5,
+    marginY: layout.marginY ?? 5,
+    borderWidth: layout.borderWidth ?? 1,
+    borderHeight: layout.borderHeight ?? 1,
     candidateSpacing: layout.candidateSpacing ?? layout.spacing ?? 8,
-    shadowSize: layout.shadowSize ?? 8,
+    hiliteSpacing: layout.hiliteSpacing ?? 4,
+    lineSpacing: layout.lineSpacing ?? layout.candidateSpacing ?? 8,
+    hilitePadding: layout.hilitePadding ?? 2,
+    hilitePaddingX: layout.hilitePaddingX ?? layout.hilitePadding ?? 2,
+    hilitePaddingY: layout.hilitePaddingY ?? layout.hilitePadding ?? 2,
+    minWidth: layout.minWidth ?? 96,
+    minHeight: layout.minHeight ?? 0,
+    shadowSize: layout.shadowRadius ?? layout.shadowSize ?? 8,
+    shadowOffsetX: layout.shadowOffsetX ?? 0,
+    shadowOffsetY: layout.shadowOffsetY ?? 4,
   };
 }
 
 function defaultLayoutForPlatform(platform) {
   return platform === 'squirrel'
-    ? { fontFace: COMMON_FONTS[0], fontPoint: 16, candidateListLayout: 'stacked', cornerRadius: 6 }
-    : { fontFace: COMMON_FONTS[0], fontPoint: 16, horizontal: false, cornerRadius: 6 };
+    ? {
+        fontFace: COMMON_FONTS[0],
+        fontPoint: 16,
+        labelFontPoint: 16,
+        commentFontPoint: 16,
+        candidateListLayout: 'stacked',
+        candidateFormat: '%c. %@',
+        cornerRadius: 6,
+        hilitedCornerRadius: 6,
+        borderWidth: 1,
+        borderHeight: 1,
+        spacing: 8,
+        hiliteSpacing: 4,
+        lineSpacing: 8,
+        minWidth: 96,
+      }
+    : {
+        fontFace: COMMON_FONTS[0],
+        fontPoint: 16,
+        labelFontPoint: 16,
+        commentFontPoint: 16,
+        horizontal: false,
+        labelFormat: '%s.',
+        markText: '',
+        cornerRadius: 6,
+        hilitedCornerRadius: 6,
+        marginX: 5,
+        marginY: 5,
+        borderWidth: 1,
+        borderHeight: 1,
+        candidateSpacing: 8,
+        hiliteSpacing: 4,
+        lineSpacing: 8,
+        hilitePadding: 2,
+        hilitePaddingX: 2,
+        hilitePaddingY: 2,
+        minWidth: 96,
+        minHeight: 0,
+        shadowRadius: 8,
+        shadowOffsetX: 0,
+        shadowOffsetY: 4,
+      };
 }
 
 function cloneSkin(skin) {

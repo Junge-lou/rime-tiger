@@ -5,3 +5,4 @@ calculator_translator = require("calculator_translator")  --简易计算器
 exe_processor = require("exe")  -- 网页启动器
 shijian2_translator = require("shijian2") -- 高级时间
 symbol_hint_translator = require("symbol_hint") --反斜杠符号提示
+rime_skin_editor = require("rime_skin_editor") --皮肤编辑器入口

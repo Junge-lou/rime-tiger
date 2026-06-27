@@ -1,14 +1,30 @@
 #!/bin/zsh
 cd "$(dirname "$0")/.." || exit 1
 
-if [ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+HTML_PATH="$PWD/Rime皮肤编辑器/index.html"
+
+open_static_editor() {
+  echo "未找到可直接使用的 Python 3.7+，无法自动启动本地服务。"
+  echo "将打开网页版；请使用 Chrome 或 Edge 选择 Rime 配置文件夹。"
+  if open -a "Google Chrome" "$HTML_PATH" >/dev/null 2>&1; then
+    return
+  fi
+  if open -a "Microsoft Edge" "$HTML_PATH" >/dev/null 2>&1; then
+    return
+  fi
+  open "$HTML_PATH"
+}
+
+python_ok() {
+  "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 7) else 1)' >/dev/null 2>&1
+}
+
+PYTHON_BIN="$(command -v python3 2>/dev/null || true)"
+if [ -n "$PYTHON_BIN" ] && [ "$PYTHON_BIN" != "/usr/bin/python3" ] && python_ok "$PYTHON_BIN"; then
+  "$PYTHON_BIN" "Rime皮肤编辑器/local/local_server.py" --root "$PWD"
+elif xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ] && python_ok /usr/bin/python3; then
   /usr/bin/python3 "Rime皮肤编辑器/local/local_server.py" --root "$PWD"
-elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
-  python3 "Rime皮肤编辑器/local/local_server.py" --root "$PWD"
-elif command -v node >/dev/null 2>&1; then
-  node "Rime皮肤编辑器/local/local_server.mjs" --root "$PWD"
 else
-  echo "未找到 Python 3 或 Node.js，无法启动本地服务。"
-  echo "请继续使用 Chrome/Edge 的“选择 Rime 配置文件夹”模式。"
+  open_static_editor
   read -r "unused?按回车关闭..."
 fi

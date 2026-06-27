@@ -4,12 +4,19 @@ import json
 import mimetypes
 import os
 import secrets
+import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+if sys.version_info < (3, 7):
+    print('Rime 皮肤编辑器本地服务需要 Python 3.7 或更新版本。', file=sys.stderr)
+    sys.exit(1)
 
 BACKUP_ROOT = 'Rime皮肤编辑器备份'
 FRONTEND_FILES = {'squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml'}
@@ -25,9 +32,10 @@ def resolve_allowed_path(root, requested_path):
         raise ValueError('不允许访问这个路径。')
 
     is_frontend_file = len(parts) == 1 and parts[0] in FRONTEND_FILES
+    is_custom_file = len(parts) == 1 and parts[0].endswith('.custom.yaml')
     is_schema_file = len(parts) == 1 and parts[0].endswith('.schema.yaml')
     is_backup_file = len(parts) >= 2 and parts[0] == BACKUP_ROOT
-    if not is_frontend_file and not is_schema_file and not is_backup_file:
+    if not is_frontend_file and not is_custom_file and not is_schema_file and not is_backup_file:
         raise ValueError('不允许访问这个路径。')
 
     root_path = Path(root).resolve()
@@ -54,10 +62,22 @@ def read_config_snapshot(root):
         raw_files[key] = file_path.read_text(encoding='utf-8') if exists else ''
     return {
         'folderName': root_path.name or str(root_path),
+        'rootPath': str(root_path),
         'rawFiles': raw_files,
         'fileExists': file_exists,
+        'customFiles': read_root_custom_files(root_path),
         'hasAnySchemaFile': any(path.is_file() and path.name.endswith('.schema.yaml') for path in root_path.iterdir()),
     }
+
+
+def read_root_custom_files(root_path):
+    result = []
+    for path in sorted(root_path.iterdir(), key=lambda item: item.name):
+        if not path.is_file() or not path.name.endswith('.custom.yaml') or path.name in FRONTEND_FILES:
+            continue
+        file_path = resolve_allowed_path(root_path, path.name)
+        result.append({'name': path.name, 'text': file_path.read_text(encoding='utf-8')})
+    return result
 
 
 def list_backups(root):
@@ -77,6 +97,16 @@ def list_backups(root):
     return backups
 
 
+def remove_backup(root, name):
+    raw = str(name or '')
+    if not raw or raw in {'.', '..'} or '/' in raw or '\\' in raw or '\0' in raw:
+        raise ValueError('不允许访问这个路径。')
+    marker = resolve_allowed_path(root, f'{BACKUP_ROOT}/{raw}/manifest.json')
+    backup_dir = marker.parent
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+
+
 def read_manifest(manifest_path):
     if not manifest_path.exists():
         return None
@@ -90,6 +120,7 @@ class RimeEditorHandler(BaseHTTPRequestHandler):
     root = None
     token = ''
     static_root = STATIC_ROOT
+    last_seen = 0.0
 
     def do_GET(self):
         self.handle_request()
@@ -110,9 +141,12 @@ class RimeEditorHandler(BaseHTTPRequestHandler):
         try:
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path.startswith('/api/'):
-                if self.headers.get('x-rime-editor-token') != self.token:
+                query = urllib.parse.parse_qs(parsed.query)
+                token = self.headers.get('x-rime-editor-token') or query.get('token', [''])[0]
+                if token != self.token:
                     self.send_json(403, {'error': '访问令牌无效。'})
                     return
+                type(self).last_seen = time.monotonic()
                 self.handle_api(parsed)
                 return
             self.serve_static(parsed.path)
@@ -121,11 +155,22 @@ class RimeEditorHandler(BaseHTTPRequestHandler):
 
     def handle_api(self, parsed):
         query = urllib.parse.parse_qs(parsed.query)
+        if self.command == 'POST' and parsed.path == '/api/ping':
+            self.send_json(200, {'ok': True})
+            return
+        if self.command == 'POST' and parsed.path == '/api/close':
+            self.send_json(200, {'ok': True})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
         if self.command == 'GET' and parsed.path == '/api/config':
             self.send_json(200, read_config_snapshot(self.root))
             return
         if self.command == 'GET' and parsed.path == '/api/backups':
             self.send_json(200, {'backups': list_backups(self.root)})
+            return
+        if self.command == 'DELETE' and parsed.path == '/api/backup':
+            remove_backup(self.root, query.get('name', [''])[0])
+            self.send_json(200, {'ok': True})
             return
         if self.command == 'GET' and parsed.path == '/api/file':
             path = query.get('path', [''])[0]
@@ -218,6 +263,8 @@ def main():
     parser.add_argument('--root', default=str(STATIC_ROOT.parent))
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--no-open', action='store_true')
+    parser.add_argument('--idle-timeout-ms', type=int, default=60000)
+    parser.add_argument('--no-idle-exit', action='store_true')
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -226,8 +273,11 @@ def main():
         'root': root,
         'token': token,
         'static_root': STATIC_ROOT,
+        'last_seen': time.monotonic(),
     })
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler)
+    if not args.no_idle_exit and args.idle_timeout_ms > 0:
+        start_idle_watchdog(server, handler, args.idle_timeout_ms / 1000)
     port = server.server_address[1]
     url = f'http://127.0.0.1:{port}/?token={token}'
     print(f'Rime 皮肤编辑器已启动：{url}', flush=True)
@@ -241,6 +291,17 @@ def main():
         print('\n已停止本地服务。', flush=True)
     finally:
         server.server_close()
+
+
+def start_idle_watchdog(server, handler, timeout_seconds):
+    def watch():
+        while True:
+            time.sleep(min(5, max(0.5, timeout_seconds / 4)))
+            if time.monotonic() - handler.last_seen >= timeout_seconds:
+                server.shutdown()
+                return
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 if __name__ == '__main__':

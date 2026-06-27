@@ -67,12 +67,16 @@ switches: # 0 默认关，1 默认开
   #   states: [ 反繁, 反简 ]
   - name: full_shape
     states: [ 半角, "全角 Shift+Space" ]
+  - name: rime_skin_editor
+    reset: 0
+    states: [ 皮肤编辑, 打开皮肤编辑 ]
 
 engine:
   processors:
     - ascii_composer
     - recognizer
     - lua_processor@*option_sync #跨窗口同步功能开关
+    - lua_processor@*rime_skin_editor*processor #皮肤编辑器入口
     - lua_processor@*input_speed_stat*processor #测速统计开关
     - lua_processor@*djs_countdown*processor #倒计时管理
     - lua_processor@*mars*processor #火星文命令开关

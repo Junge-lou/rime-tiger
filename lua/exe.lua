@@ -29,7 +29,9 @@ local function exe(key, env)
   local engine = env.engine
   local context = engine.context
   local kNoop = 2
-  if command_matches(context.input, "huma", "zhmn") then
+  if command_matches(context.input, "skin", "pifu", "pfbj") then
+    require("rime_skin_editor").open_from_command(env)
+  elseif command_matches(context.input, "huma", "zhmn") then
     generic_open("https://tiger-code.com")
     context:clear()
   elseif command_matches(context.input, "baidu", "bddu", "fuxl") then

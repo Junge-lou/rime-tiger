@@ -1,6 +1,8 @@
 param(
   [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
-  [int]$Port = 0
+  [int]$Port = 0,
+  [int]$IdleTimeoutMs = 60000,
+  [switch]$NoIdleExit
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,9 +20,10 @@ function Resolve-AllowedPath {
   $Parts = @($RequestedPath -replace '\\','/' -split '/' | Where-Object { $_ })
   if ($Parts -contains '..') { throw '不允许访问这个路径。' }
   $IsFrontendFile = $Parts.Count -eq 1 -and @('squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml') -contains $Parts[0]
+  $IsCustomFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.custom.yaml')
   $IsSchemaFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.schema.yaml')
   $IsBackupFile = $Parts.Count -ge 2 -and $Parts[0] -eq $BackupRoot
-  if (-not ($IsFrontendFile -or $IsSchemaFile -or $IsBackupFile)) { throw '不允许访问这个路径。' }
+  if (-not ($IsFrontendFile -or $IsCustomFile -or $IsSchemaFile -or $IsBackupFile)) { throw '不允许访问这个路径。' }
   $TargetPath = $Root
   foreach ($Part in $Parts) {
     $TargetPath = Join-Path $TargetPath $Part
@@ -82,10 +85,23 @@ function Get-ConfigSnapshot {
   }
   return @{
     folderName = Split-Path $Root -Leaf
+    rootPath = [System.IO.Path]::GetFullPath($Root)
     rawFiles = $RawFiles
     fileExists = $FileExists
+    customFiles = @(Get-RootCustomFiles)
     hasAnySchemaFile = [bool](Get-ChildItem $Root -File -Filter '*.schema.yaml' -ErrorAction SilentlyContinue | Select-Object -First 1)
   }
+}
+
+function Get-RootCustomFiles {
+  $FrontendFiles = @('squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml')
+  $Items = @()
+  foreach ($File in Get-ChildItem $Root -File -Filter '*.custom.yaml' -ErrorAction SilentlyContinue | Sort-Object Name) {
+    if ($FrontendFiles -contains $File.Name) { continue }
+    $Path = Resolve-AllowedPath $File.Name
+    $Items += @{ name = $File.Name; text = Get-Content $Path -Raw -Encoding UTF8 }
+  }
+  return $Items
 }
 
 function Get-Backups {
@@ -99,6 +115,18 @@ function Get-Backups {
     $Items += @{ name = $Dir.Name; manifest = $Manifest; availableFiles = $Files }
   }
   return @($Items | Sort-Object name -Descending)
+}
+
+function Remove-Backup {
+  param([string]$Name)
+  if ([string]::IsNullOrWhiteSpace($Name) -or $Name -eq '.' -or $Name -eq '..' -or $Name.Contains('/') -or $Name.Contains('\') -or $Name.Contains([char]0)) {
+    throw '不允许访问这个路径。'
+  }
+  $Marker = Resolve-AllowedPath "$BackupRoot/$Name/manifest.json"
+  $BackupDir = Split-Path $Marker -Parent
+  if (Test-Path $BackupDir -PathType Container) {
+    Remove-Item $BackupDir -Recurse -Force
+  }
 }
 
 function Read-Manifest {
@@ -130,21 +158,45 @@ if (-not $Listener) {
   throw '无法启动本地服务：17890-17920 端口都不可用。'
 }
 $Url = "http://localhost:$ActualPort/?token=$Token"
+$LastSeen = Get-Date
 Write-Host "Rime 皮肤编辑器已启动：$Url"
 Write-Host "配置目录：$Root"
 Write-Host "关闭这个窗口即可停止本地服务。"
 Start-Process $Url
 
 while ($Listener.IsListening) {
-  $Context = $Listener.GetContext()
+  $AsyncResult = $Listener.BeginGetContext($null, $null)
+  while (-not $AsyncResult.AsyncWaitHandle.WaitOne(500)) {
+    if (-not $NoIdleExit -and $IdleTimeoutMs -gt 0 -and ((Get-Date) - $LastSeen).TotalMilliseconds -ge $IdleTimeoutMs) {
+      $Listener.Stop()
+      break
+    }
+  }
+  if (-not $Listener.IsListening) { break }
+  $Context = $Listener.EndGetContext($AsyncResult)
   try {
     $Request = $Context.Request
     $Response = $Context.Response
     $Path = $Request.Url.AbsolutePath
     if ($Path.StartsWith('/api/')) {
       if ($Request.Headers['x-rime-editor-token'] -ne $Token) {
+        $QueryToken = Get-QueryValue $Request 'token'
+      } else {
+        $QueryToken = $Token
+      }
+      if ($QueryToken -ne $Token) {
         Send-Json $Response 403 @{ error = '访问令牌无效。' }
         continue
+      }
+      $LastSeen = Get-Date
+      if ($Request.HttpMethod -eq 'POST' -and $Path -eq '/api/ping') {
+        Send-Json $Response 200 @{ ok = $true }
+        continue
+      }
+      if ($Request.HttpMethod -eq 'POST' -and $Path -eq '/api/close') {
+        Send-Json $Response 200 @{ ok = $true }
+        $Listener.Stop()
+        break
       }
       if ($Request.HttpMethod -eq 'GET' -and $Path -eq '/api/config') {
         Send-Json $Response 200 (Get-ConfigSnapshot)
@@ -152,6 +204,11 @@ while ($Listener.IsListening) {
       }
       if ($Request.HttpMethod -eq 'GET' -and $Path -eq '/api/backups') {
         Send-Json $Response 200 @{ backups = Get-Backups }
+        continue
+      }
+      if ($Request.HttpMethod -eq 'DELETE' -and $Path -eq '/api/backup') {
+        Remove-Backup (Get-QueryValue $Request 'name')
+        Send-Json $Response 200 @{ ok = $true }
         continue
       }
       if ($Request.HttpMethod -eq 'GET' -and $Path -eq '/api/file') {

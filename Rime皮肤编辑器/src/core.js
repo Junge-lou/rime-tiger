@@ -204,7 +204,10 @@ function parseSquirrelConfig(text) {
   if (!isPlainObject(schemes)) {
     throw new Error('squirrel.custom.yaml 的 patch.preset_color_schemes 必须是对象。');
   }
-  const globalLayout = layoutFromStyle(style);
+  const globalLayout = {
+    ...layoutFromStyle(style),
+    ...layoutFromMenuPatch(patch),
+  };
   const skins = Object.entries(schemes).map(([id, scheme]) =>
     skinFromScheme('squirrel', id, scheme, globalLayout, {
       file: 'squirrel.custom.yaml',
@@ -226,7 +229,10 @@ function parseWeaselConfig(text) {
   const patch = validatePatchObject(doc, 'weasel.custom.yaml');
   const style = patch.style || {};
   if (!isPlainObject(style)) throw new Error('weasel.custom.yaml 的 patch.style 必须是对象。');
-  const globalLayout = layoutFromStyle(style);
+  const globalLayout = {
+    ...layoutFromStyle(style),
+    ...layoutFromMenuPatch(patch),
+  };
   const skins = [];
 
   for (const [key, value] of Object.entries(patch)) {
@@ -248,6 +254,37 @@ function parseWeaselConfig(text) {
     activeSkinId: patch['style/color_scheme'] || style.color_scheme || '',
     darkSkinId: '',
   };
+}
+
+function parseGlobalCustomFiles(files = []) {
+  for (const file of files) {
+    const name = String(file?.name || '');
+    const text = String(file?.text || '');
+    if (!name.endsWith('.custom.yaml') || !text.trim()) continue;
+    const labels = extractAlternativeSelectLabels(text);
+    if (labels.length) {
+      return {
+        layout: { alternativeSelectLabels: labels },
+        sources: { alternativeSelectLabels: name },
+      };
+    }
+  }
+  return { layout: {}, sources: {} };
+}
+
+function updateGlobalCustomConfig(text, layout = {}) {
+  validatePatchObject(parseYaml(text || 'patch:\n'), 'custom.yaml');
+  let output = ensurePatchText(text || 'patch:\n');
+  if (Object.prototype.hasOwnProperty.call(layout, 'alternativeSelectLabels')) {
+    const labels = sanitizeLabels(layout.alternativeSelectLabels);
+    output = removeNestedBlock(output, ['patch', 'menu', 'alternative_select_labels']);
+    if (labels.length) {
+      output = upsertNestedValue(output, ['patch', 'menu/alternative_select_labels'], labels);
+    } else {
+      output = removeNestedBlock(output, ['patch', 'menu/alternative_select_labels']);
+    }
+  }
+  return ensureTrailingNewline(output);
 }
 
 function validatePatchObject(doc, filename) {
@@ -273,7 +310,30 @@ function updateSquirrelConfig(text, skin, options = {}) {
   if (stylePatch.candidate_list_layout !== undefined) {
     output = removeNestedBlock(output, ['patch', 'style', 'horizontal']);
   }
+  if (Object.prototype.hasOwnProperty.call(options, 'alternativeSelectLabels')) {
+    output = updateGlobalCustomConfig(output, {
+      alternativeSelectLabels: options.alternativeSelectLabels,
+    });
+  }
   return ensureTrailingNewline(output);
+}
+
+function updateActiveSkinConfig(text, platform, skinId, options = {}) {
+  const id = String(skinId || '').trim();
+  if (!id) throw new Error('缺少当前皮肤 ID。');
+  const output = ensurePatchText(text || 'patch:\n');
+  if (platform === 'squirrel') {
+    validatePatchObject(parseYaml(output), 'squirrel.custom.yaml');
+    return ensureTrailingNewline(upsertObjectFields(output, ['patch', 'style'], {
+      color_scheme: id,
+      ...(options.makeDark ? { color_scheme_dark: id } : {}),
+    }));
+  }
+  if (platform === 'weasel') {
+    validatePatchObject(parseYaml(output), 'weasel.custom.yaml');
+    return ensureTrailingNewline(upsertNestedValue(output, ['patch', 'style/color_scheme'], id));
+  }
+  throw new Error(`不支持的前端：${platform}`);
 }
 
 function updateWeaselConfig(text, skin, options = {}) {
@@ -284,6 +344,11 @@ function updateWeaselConfig(text, skin, options = {}) {
   output = upsertObjectFields(output, ['patch', `preset_color_schemes/${skin.id}`], schemePatch);
   output = upsertObjectFields(output, ['patch', 'style'], stylePatch);
   if (options.makeActive) output = upsertNestedValue(output, ['patch', 'style/color_scheme'], skin.id);
+  if (Object.prototype.hasOwnProperty.call(options, 'alternativeSelectLabels')) {
+    output = updateGlobalCustomConfig(output, {
+      alternativeSelectLabels: options.alternativeSelectLabels,
+    });
+  }
   return ensureTrailingNewline(output);
 }
 
@@ -310,13 +375,21 @@ function copySkinToPlatform(skin, targetPlatform) {
     if (sourceLayout.candidateListLayout) {
       layout.horizontal = sourceLayout.candidateListLayout === 'linear';
     }
+    if (sourceLayout.candidateFormat && !sourceLayout.labelFormat) {
+      layout.labelFormat = labelFormatFromCandidateFormat(sourceLayout.candidateFormat);
+    }
     delete layout.candidateListLayout;
     delete layout.textOrientation;
+    delete layout.candidateFormat;
   } else if (targetPlatform === 'squirrel') {
     if (typeof sourceLayout.horizontal === 'boolean') {
       layout.candidateListLayout = sourceLayout.horizontal ? 'linear' : 'stacked';
     }
+    if (sourceLayout.labelFormat && !sourceLayout.candidateFormat) {
+      layout.candidateFormat = candidateFormatFromLabelFormat(sourceLayout.labelFormat);
+    }
     delete layout.horizontal;
+    delete layout.labelFormat;
   }
 
   return {
@@ -327,6 +400,40 @@ function copySkinToPlatform(skin, targetPlatform) {
     source: undefined,
     unsupportedFields: {},
     copiedFrom: skin.platform,
+  };
+}
+
+function createSkinPackage(skin, options = {}) {
+  if (!isPlainObject(skin)) throw new Error('缺少皮肤内容。');
+  const sourcePlatform = options.sourcePlatform || skin.platform || '';
+  return JSON.stringify({
+    format: 'rime-skin-editor-skin',
+    version: 1,
+    exportedAt: options.exportedAt || new Date().toISOString(),
+    sourcePlatform,
+    skin: cloneJson(skin),
+  }, null, 2);
+}
+
+function parseSkinPackage(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text || ''));
+  } catch (error) {
+    throw new Error(`不是有效的皮肤包：${error.message}`);
+  }
+  if (!isPlainObject(parsed) || parsed.format !== 'rime-skin-editor-skin' || parsed.version !== 1) {
+    throw new Error('不支持的皮肤包格式。');
+  }
+  if (!isPlainObject(parsed.skin)) {
+    throw new Error('皮肤包缺少皮肤内容。');
+  }
+  return {
+    format: parsed.format,
+    version: parsed.version,
+    exportedAt: parsed.exportedAt || '',
+    sourcePlatform: parsed.sourcePlatform || parsed.skin.platform || '',
+    skin: cloneJson(parsed.skin),
   };
 }
 
@@ -409,6 +516,7 @@ function nextContentLine(lines, startIndex) {
 function findTopLevelColon(line) {
   let quote = '';
   let braceDepth = 0;
+  let bracketDepth = 0;
   for (let index = 0; index < line.length; index += 1) {
     const char = line[index];
     if ((char === '"' || char === "'") && line[index - 1] !== '\\') {
@@ -417,7 +525,11 @@ function findTopLevelColon(line) {
       braceDepth += 1;
     } else if (!quote && char === '}') {
       braceDepth -= 1;
-    } else if (!quote && braceDepth === 0 && char === ':') {
+    } else if (!quote && char === '[') {
+      bracketDepth += 1;
+    } else if (!quote && char === ']') {
+      bracketDepth -= 1;
+    } else if (!quote && braceDepth === 0 && bracketDepth === 0 && char === ':') {
       return index;
     }
   }
@@ -427,6 +539,7 @@ function findTopLevelColon(line) {
 function parseScalar(value) {
   const trimmed = value.trim();
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) return parseInlineObject(trimmed);
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return parseInlineArray(trimmed);
   if (/^["']/.test(trimmed)) return unquote(trimmed);
   if (/^(true|false)$/i.test(trimmed)) return /^true$/i.test(trimmed);
   if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
@@ -448,10 +561,17 @@ function parseInlineObject(value) {
   return result;
 }
 
+function parseInlineArray(value) {
+  const inner = value.slice(1, -1).trim();
+  if (!inner) return [];
+  return splitTopLevel(inner, ',').filter((part) => part !== '').map(parseScalar);
+}
+
 function splitTopLevel(value, separator) {
   const parts = [];
   let quote = '';
   let braceDepth = 0;
+  let bracketDepth = 0;
   let start = 0;
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
@@ -461,7 +581,11 @@ function splitTopLevel(value, separator) {
       braceDepth += 1;
     } else if (!quote && char === '}') {
       braceDepth -= 1;
-    } else if (!quote && braceDepth === 0 && char === separator) {
+    } else if (!quote && char === '[') {
+      bracketDepth += 1;
+    } else if (!quote && char === ']') {
+      bracketDepth -= 1;
+    } else if (!quote && braceDepth === 0 && bracketDepth === 0 && char === separator) {
       parts.push(value.slice(start, index).trim());
       start = index + 1;
     }
@@ -482,10 +606,13 @@ function unquote(value) {
 }
 
 function renderKey(key) {
-  return /[\s/:.[\]"']/.test(key) ? JSON.stringify(key) : key;
+  return /[\s:.[\]"']/.test(key) ? JSON.stringify(key) : key;
 }
 
 function renderScalar(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(renderScalar).join(', ')}]`;
+  }
   if (typeof value === 'string') {
     if (/^0x[0-9a-fA-F]+$/.test(value)) return value;
     if (/^[A-Za-z0-9_.-]+$/.test(value)) return value;
@@ -505,7 +632,7 @@ function isPlainObject(value) {
 }
 
 function allowsListChildren(key) {
-  return /(^|\/)(schema_list|switches|bindings|schema_dependencies|accept|reject|import_tables|columns|encoder\/rules)$/.test(key);
+  return /(^|\/)(schema_list|switches|bindings|schema_dependencies|accept|reject|import_tables|columns|encoder\/rules|alternative_select_labels)$/.test(key);
 }
 
 function deepMergeObjects(base, updates) {
@@ -541,6 +668,7 @@ function colorsFromScheme(scheme) {
     back: 'back_color',
     border: 'border_color',
     text: 'text_color',
+    preeditBack: 'preedit_back_color',
     candidateText: 'candidate_text_color',
     candidateBack: 'candidate_back_color',
     commentText: 'comment_text_color',
@@ -550,8 +678,13 @@ function colorsFromScheme(scheme) {
     hilitedCandidateText: 'hilited_candidate_text_color',
     hilitedCandidateBack: 'hilited_candidate_back_color',
     hilitedCommentText: 'hilited_comment_text_color',
+    hilitedCandidateLabel: 'hilited_candidate_label_color',
     hilitedLabel: 'hilited_label_color',
+    hilitedMark: 'hilited_mark_color',
     shadow: 'shadow_color',
+    candidateShadow: 'candidate_shadow_color',
+    hilitedShadow: 'hilited_shadow_color',
+    hilitedCandidateShadow: 'hilited_candidate_shadow_color',
   };
   const colors = {};
   for (const [role, key] of Object.entries(mapping)) {
@@ -564,10 +697,24 @@ function layoutFromStyle(style = {}) {
   const layout = {};
   if (style.font_face !== undefined) layout.fontFace = style.font_face;
   if (style.font_point !== undefined) layout.fontPoint = style.font_point;
+  if (style.label_font_face !== undefined) layout.labelFontFace = style.label_font_face;
   if (style.label_font_point !== undefined) layout.labelFontPoint = style.label_font_point;
+  if (style.comment_font_face !== undefined) layout.commentFontFace = style.comment_font_face;
   if (style.comment_font_point !== undefined) layout.commentFontPoint = style.comment_font_point;
+  if (style.label_format !== undefined) layout.labelFormat = style.label_format;
+  if (style.candidate_format !== undefined) layout.candidateFormat = String(style.candidate_format);
+  if (style.mark_text !== undefined) layout.markText = style.mark_text;
+  if (style.inline_preedit !== undefined) layout.inlinePreedit = style.inline_preedit;
+  if (style.preedit_type !== undefined) layout.preeditType = style.preedit_type;
   if (style.corner_radius !== undefined) layout.cornerRadius = style.corner_radius;
   if (style.hilited_corner_radius !== undefined) layout.hilitedCornerRadius = style.hilited_corner_radius;
+  if (style.border_width !== undefined) layout.borderWidth = style.border_width;
+  if (style.border_height !== undefined) layout.borderHeight = style.border_height;
+  if (style.min_width !== undefined) layout.minWidth = style.min_width;
+  if (style.min_height !== undefined) layout.minHeight = style.min_height;
+  if (style.spacing !== undefined) layout.spacing = style.spacing;
+  if (style.hilite_spacing !== undefined) layout.hiliteSpacing = style.hilite_spacing;
+  if (style.line_spacing !== undefined) layout.lineSpacing = style.line_spacing;
   if (style.candidate_list_layout !== undefined) layout.candidateListLayout = style.candidate_list_layout;
   if (style.text_orientation !== undefined) layout.textOrientation = style.text_orientation;
   if (style.horizontal !== undefined) layout.horizontal = style.horizontal;
@@ -575,15 +722,65 @@ function layoutFromStyle(style = {}) {
     layout.candidateListLayout = style.horizontal ? 'linear' : 'stacked';
   }
   if (isPlainObject(style.layout)) {
+    if (style.layout.align_type !== undefined) layout.alignType = style.layout.align_type;
     if (style.layout.corner_radius !== undefined) layout.cornerRadius = style.layout.corner_radius;
     if (style.layout.round_corner !== undefined) layout.hilitedCornerRadius = style.layout.round_corner;
+    if (style.layout.border_width !== undefined) layout.borderWidth = style.layout.border_width;
+    if (style.layout.border_height !== undefined) layout.borderHeight = style.layout.border_height;
     if (style.layout.margin_x !== undefined) layout.marginX = style.layout.margin_x;
     if (style.layout.margin_y !== undefined) layout.marginY = style.layout.margin_y;
     if (style.layout.candidate_spacing !== undefined) layout.candidateSpacing = style.layout.candidate_spacing;
+    if (style.layout.hilite_padding !== undefined) layout.hilitePadding = style.layout.hilite_padding;
+    if (style.layout.hilite_padding_x !== undefined) layout.hilitePaddingX = style.layout.hilite_padding_x;
+    if (style.layout.hilite_padding_y !== undefined) layout.hilitePaddingY = style.layout.hilite_padding_y;
     if (style.layout.hilite_spacing !== undefined) layout.hiliteSpacing = style.layout.hilite_spacing;
+    if (style.layout.line_spacing !== undefined) layout.lineSpacing = style.layout.line_spacing;
     if (style.layout.spacing !== undefined) layout.spacing = style.layout.spacing;
+    if (style.layout.min_width !== undefined) layout.minWidth = style.layout.min_width;
+    if (style.layout.min_height !== undefined) layout.minHeight = style.layout.min_height;
+    if (style.layout.shadow_offset_x !== undefined) layout.shadowOffsetX = style.layout.shadow_offset_x;
+    if (style.layout.shadow_offset_y !== undefined) layout.shadowOffsetY = style.layout.shadow_offset_y;
+    if (style.layout.shadow_radius !== undefined) layout.shadowRadius = style.layout.shadow_radius;
   }
   return layout;
+}
+
+function layoutFromMenuPatch(patch = {}) {
+  const labels = alternativeSelectLabelsFromPatch(patch);
+  return labels.length ? { alternativeSelectLabels: labels } : {};
+}
+
+function alternativeSelectLabelsFromPatch(patch = {}) {
+  const direct = patch['menu/alternative_select_labels'];
+  const nested = isPlainObject(patch.menu) ? patch.menu.alternative_select_labels : undefined;
+  return sanitizeLabels(Array.isArray(direct) ? direct : nested);
+}
+
+function extractAlternativeSelectLabels(text) {
+  try {
+    const doc = parseYaml(text);
+    const labels = alternativeSelectLabelsFromPatch(doc.patch || doc);
+    if (labels.length) return labels;
+  } catch {
+    // Fall through to a narrow text scan so one unrelated custom file cannot block startup.
+  }
+
+  const lines = String(text || '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = stripYamlComment(lines[index]);
+    const direct = line.match(/^\s*["']?menu\/alternative_select_labels["']?\s*:\s*(\[.*\])\s*$/);
+    if (direct) return sanitizeLabels(parseInlineArray(direct[1]));
+    const nested = line.match(/^\s*alternative_select_labels\s*:\s*(\[.*\])\s*$/);
+    if (nested) return sanitizeLabels(parseInlineArray(nested[1]));
+  }
+  return [];
+}
+
+function sanitizeLabels(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((label) => String(label ?? '').trim())
+    .filter(Boolean);
 }
 
 function ensurePatchText(text) {
@@ -796,6 +993,7 @@ function schemeFromSkin(skin, platform) {
     back: 'back_color',
     border: 'border_color',
     text: 'text_color',
+    preeditBack: 'preedit_back_color',
     candidateText: 'candidate_text_color',
     candidateBack: 'candidate_back_color',
     commentText: 'comment_text_color',
@@ -805,8 +1003,13 @@ function schemeFromSkin(skin, platform) {
     hilitedCandidateText: 'hilited_candidate_text_color',
     hilitedCandidateBack: 'hilited_candidate_back_color',
     hilitedCommentText: 'hilited_comment_text_color',
+    hilitedCandidateLabel: 'hilited_candidate_label_color',
     hilitedLabel: 'hilited_label_color',
+    hilitedMark: 'hilited_mark_color',
     shadow: 'shadow_color',
+    candidateShadow: 'candidate_shadow_color',
+    hilitedShadow: 'hilited_shadow_color',
+    hilitedCandidateShadow: 'hilited_candidate_shadow_color',
   };
 
   for (const [role, key] of Object.entries(colorKeys)) {
@@ -820,8 +1023,15 @@ function schemeFromSkin(skin, platform) {
   if (platform === 'squirrel') {
     if (layout.fontPoint !== undefined) scheme.font_point = layout.fontPoint;
     if (layout.candidateListLayout !== undefined) scheme.candidate_list_layout = layout.candidateListLayout;
+    if (layout.candidateFormat !== undefined) scheme.candidate_format = layout.candidateFormat;
     if (layout.cornerRadius !== undefined) scheme.corner_radius = layout.cornerRadius;
     if (layout.hilitedCornerRadius !== undefined) scheme.hilited_corner_radius = layout.hilitedCornerRadius;
+    if (layout.borderWidth !== undefined) scheme.border_width = layout.borderWidth;
+    if (layout.borderHeight !== undefined) scheme.border_height = layout.borderHeight;
+    if (layout.spacing !== undefined) scheme.spacing = layout.spacing;
+    else if (layout.candidateSpacing !== undefined) scheme.spacing = layout.candidateSpacing;
+    if (layout.hiliteSpacing !== undefined) scheme.hilite_spacing = layout.hiliteSpacing;
+    if (layout.lineSpacing !== undefined) scheme.line_spacing = layout.lineSpacing;
   }
 
   return scheme;
@@ -833,8 +1043,14 @@ function styleFromSkin(skin, platform) {
 
   if (layout.fontFace !== undefined) style.font_face = layout.fontFace;
   if (layout.fontPoint !== undefined) style.font_point = layout.fontPoint;
+  if (layout.labelFontFace !== undefined) style.label_font_face = layout.labelFontFace;
   if (layout.labelFontPoint !== undefined) style.label_font_point = layout.labelFontPoint;
+  if (layout.commentFontFace !== undefined) style.comment_font_face = layout.commentFontFace;
   if (layout.commentFontPoint !== undefined) style.comment_font_point = layout.commentFontPoint;
+  if (layout.labelFormat !== undefined) style.label_format = layout.labelFormat;
+  if (layout.markText !== undefined) style.mark_text = layout.markText;
+  if (layout.inlinePreedit !== undefined) style.inline_preedit = layout.inlinePreedit;
+  if (layout.preeditType !== undefined) style.preedit_type = layout.preeditType;
 
   if (platform === 'squirrel') {
     if (layout.candidateListLayout !== undefined) style.candidate_list_layout = layout.candidateListLayout;
@@ -842,21 +1058,57 @@ function styleFromSkin(skin, platform) {
     if (layout.cornerRadius !== undefined) style.corner_radius = layout.cornerRadius;
     if (layout.hilitedCornerRadius !== undefined) style.hilited_corner_radius = layout.hilitedCornerRadius;
     if (layout.spacing !== undefined) style.spacing = layout.spacing;
+    else if (layout.candidateSpacing !== undefined) style.spacing = layout.candidateSpacing;
+    if (layout.hiliteSpacing !== undefined) style.hilite_spacing = layout.hiliteSpacing;
     if (layout.lineSpacing !== undefined) style.line_spacing = layout.lineSpacing;
+    const nested = {};
+    if (layout.minWidth !== undefined) nested.min_width = layout.minWidth;
+    if (layout.minHeight !== undefined) nested.min_height = layout.minHeight;
+    if (layout.marginX !== undefined) nested.margin_x = layout.marginX;
+    if (layout.marginY !== undefined) nested.margin_y = layout.marginY;
+    if (layout.hilitePadding !== undefined) nested.hilite_padding = layout.hilitePadding;
+    if (layout.hilitePaddingX !== undefined) nested.hilite_padding_x = layout.hilitePaddingX;
+    if (layout.hilitePaddingY !== undefined) nested.hilite_padding_y = layout.hilitePaddingY;
+    if (layout.shadowOffsetX !== undefined) nested.shadow_offset_x = layout.shadowOffsetX;
+    if (layout.shadowOffsetY !== undefined) nested.shadow_offset_y = layout.shadowOffsetY;
+    if (layout.shadowRadius !== undefined) nested.shadow_radius = layout.shadowRadius;
+    if (Object.keys(nested).length) style.layout = nested;
     return style;
   }
 
   if (layout.horizontal !== undefined) style.horizontal = layout.horizontal;
   const nested = {};
+  if (layout.alignType !== undefined) nested.align_type = layout.alignType;
   if (layout.cornerRadius !== undefined) nested.corner_radius = layout.cornerRadius;
   if (layout.hilitedCornerRadius !== undefined) nested.round_corner = layout.hilitedCornerRadius;
+  if (layout.borderWidth !== undefined) nested.border_width = layout.borderWidth;
+  if (layout.borderHeight !== undefined) nested.border_height = layout.borderHeight;
   if (layout.marginX !== undefined) nested.margin_x = layout.marginX;
   if (layout.marginY !== undefined) nested.margin_y = layout.marginY;
   if (layout.candidateSpacing !== undefined) nested.candidate_spacing = layout.candidateSpacing;
+  if (layout.hilitePadding !== undefined) nested.hilite_padding = layout.hilitePadding;
+  if (layout.hilitePaddingX !== undefined) nested.hilite_padding_x = layout.hilitePaddingX;
+  if (layout.hilitePaddingY !== undefined) nested.hilite_padding_y = layout.hilitePaddingY;
   if (layout.hiliteSpacing !== undefined) nested.hilite_spacing = layout.hiliteSpacing;
+  if (layout.lineSpacing !== undefined) nested.line_spacing = layout.lineSpacing;
   if (layout.spacing !== undefined) nested.spacing = layout.spacing;
+  if (layout.minWidth !== undefined) nested.min_width = layout.minWidth;
+  if (layout.minHeight !== undefined) nested.min_height = layout.minHeight;
+  if (layout.shadowOffsetX !== undefined) nested.shadow_offset_x = layout.shadowOffsetX;
+  if (layout.shadowOffsetY !== undefined) nested.shadow_offset_y = layout.shadowOffsetY;
+  if (layout.shadowRadius !== undefined) nested.shadow_radius = layout.shadowRadius;
   if (Object.keys(nested).length) style.layout = nested;
   return style;
+}
+
+function labelFormatFromCandidateFormat(candidateFormat) {
+  const format = String(candidateFormat);
+  const beforeCandidate = format.includes('%@') ? format.split('%@')[0] : format;
+  return beforeCandidate.replace(/%c/g, '%s').trimEnd();
+}
+
+function candidateFormatFromLabelFormat(labelFormat) {
+  return `${String(labelFormat || '%s').replace(/%s/g, '%c')} %@`;
 }
 
 function cloneJson(value) {
@@ -874,11 +1126,16 @@ const RimeSkinCore = {
   stringifyYaml,
   parseSquirrelConfig,
   parseWeaselConfig,
+  parseGlobalCustomFiles,
+  updateActiveSkinConfig,
   updateSquirrelConfig,
   updateWeaselConfig,
+  updateGlobalCustomConfig,
   deleteSquirrelSkinConfig,
   deleteWeaselSkinConfig,
   copySkinToPlatform,
+  createSkinPackage,
+  parseSkinPackage,
   createBackupManifest,
   createRollbackPlan,
 };

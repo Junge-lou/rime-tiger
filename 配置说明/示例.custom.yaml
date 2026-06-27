@@ -71,6 +71,7 @@ patch:
   # switches/@8/reset: 0  # udpf_switch：若要每次重置为关，再启用这一行
   # switches/@9/reset: 0  # ascii_punct：若要每次重置为中文标点，再启用这一行
   # switches/@10/reset: 0  # full_shape：若要每次重置为半角，再启用这一行
+  # switches/@11/reset: 0  # rime_skin_editor：皮肤编辑器入口，保持为 0，触发后会自动复位
   # 也可以改开关显示文字，建议只在“切换后的状态”写一次快捷键。
   switches/@0/states: [ 中文, "西文 Shift/Caps" ]
   switches/@1/states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
@@ -83,6 +84,7 @@ patch:
   switches/@8/states: [ U编关, "U编开 Ctrl+Y" ]
   switches/@9/states: [ 。，, "．， Ctrl+." ]
   switches/@10/states: [ 半角, "全角 Shift+Space" ]
+  switches/@11/states: [ 皮肤编辑, 打开皮肤编辑 ]
 
 
   # 六、空格和常用快捷键

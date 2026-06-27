@@ -59,6 +59,25 @@ button.small {
   border-bottom: 1px solid #d9e0e8;
 }
 
+.author-info {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 220px;
+  white-space: normal;
+}
+
+.author-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+}
+
 h1,
 h2,
 p {
@@ -72,6 +91,14 @@ h1 {
 h2 {
   font-size: 15px;
   margin-bottom: 12px;
+}
+
+summary {
+  cursor: pointer;
+  color: #1f2933;
+  font-size: 15px;
+  font-weight: 600;
+  list-style-position: outside;
 }
 
 .topbar p,
@@ -108,6 +135,18 @@ h2 {
   display: none !important;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 .blocked {
   margin: 48px auto;
   max-width: 680px;
@@ -123,6 +162,14 @@ h2 {
   border: 1px solid #d9e0e8;
   border-radius: 8px;
   padding: 14px;
+}
+
+.panel > summary {
+  margin: -2px 0 12px 2px;
+}
+
+.panel:not([open]) > summary {
+  margin-bottom: -2px;
 }
 
 .sidebar,
@@ -161,7 +208,7 @@ h2 {
 }
 
 .skin-item,
-.backup-item {
+.backup-restore {
   display: grid;
   gap: 4px;
   text-align: left;
@@ -171,8 +218,22 @@ h2 {
   background: #ffffff;
 }
 
+.backup-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.backup-delete {
+  align-self: stretch;
+  border-color: #fecaca;
+  background: #fff5f5;
+  color: #b91c1c;
+}
+
 .skin-item.active,
-.backup-item.active {
+.backup-restore.active {
   border-color: #2563eb;
   background: #eef4ff;
 }
@@ -198,40 +259,99 @@ h2 {
   font-size: 12px;
 }
 
-.candidate-preview {
-  width: min(100%, 620px);
-  min-height: 96px;
-  margin: 10px auto 0;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
-  border-radius: 8px;
-  padding: 12px;
-  box-shadow: 0 10px 26px rgb(15 23 42 / 12%);
+.preview-stage {
+  display: grid;
+  justify-content: center;
+  align-content: center;
+  justify-items: start;
+  min-height: 190px;
+  margin-top: 10px;
+  padding: 34px;
+  border-radius: 6px;
+  background: #151923;
+  overflow: auto;
 }
 
-.preedit {
-  margin-bottom: 10px;
+.preview-preedit {
+  display: block;
+  min-width: 1em;
+  margin: 0 0 6px;
+  padding: 0 1px 1px;
+  line-height: 1.2;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  white-space: pre;
+}
+
+.preview-preedit[hidden] {
+  display: none;
+}
+
+.candidate-preview {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 5px;
+  box-shadow: 0 10px 26px rgb(15 23 42 / 12%);
+  overflow: hidden;
 }
 
 .candidate-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .candidate-row.stacked {
   align-items: flex-start;
   flex-direction: column;
+  flex-wrap: nowrap;
 }
 
 .candidate {
   display: inline-flex;
+  align-items: baseline;
+  box-sizing: border-box;
+  white-space: nowrap;
   border-radius: 5px;
-  padding: 4px 8px;
+  padding: 0;
 }
 
-.comment {
+.candidate-row.stacked,
+.candidate-row.stacked .candidate {
+  width: 100%;
+}
+
+.candidate-row.stacked .candidate {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, max-content) max-content;
+  align-items: baseline;
+}
+
+.candidate-row.linear .candidate {
+  display: inline-grid;
+  grid-template-columns: max-content max-content max-content max-content;
+  align-items: baseline;
+}
+
+.candidate-label,
+.candidate-mark,
+.candidate-comment {
+  flex: 0 0 auto;
+}
+
+.candidate-text {
+  flex: 0 0 auto;
+}
+
+.candidate-comment {
   opacity: 0.75;
 }
 
@@ -285,19 +405,23 @@ output {
   gap: 8px;
 }
 
+.action-panel > summary {
+  margin-bottom: 4px;
+}
+
 .message-log {
   min-height: 72px;
   white-space: pre-line;
 }
 
-details {
+details details {
   margin-top: 12px;
 }
 
-summary {
-  cursor: pointer;
+details details summary {
   color: #536172;
   font-size: 13px;
+  font-weight: 500;
 }
 
 @media (max-width: 980px) {
@@ -308,5 +432,10 @@ summary {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .author-info {
+    justify-content: flex-start;
+    min-width: 0;
   }
 }

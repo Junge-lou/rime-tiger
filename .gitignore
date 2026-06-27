@@ -1,10 +1,17 @@
 __pycache__/
 *.py[cod]
+.DS_Store
 
 # Development-only files
 tests/*
+Rime皮肤编辑器/tests/
 docs/
 tools/
+.superpowers/
+*.pid
+server-stopped
+Rime皮肤编辑器/local/local_server.mjs
+Rime皮肤编辑器/local/local_server_macos.rs
 
 # Rime generated/local files
 build/
@@ -15,5 +22,7 @@ build/
 *.reverse.bin
 installation.yaml
 user.yaml
+lua/option_state_data.lua
 sync/
 trash/
+Rime皮肤编辑器备份/
