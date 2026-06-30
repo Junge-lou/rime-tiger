@@ -1,15 +1,14 @@
 # Rime patch: tigress
 #
-# 本文件是“词库 · 常用字”补丁。
+# 本文件是“词库”补丁。
 #
 # 补丁来源：
-#   tiger_base.custom.yaml -> tigress_full.custom.yaml -> tigress.custom.yaml
+#   tiger_base.custom.yaml -> tigress.custom.yaml
 #
 # 修改指南：
-#   1. 只改词库常用：改本文件。
-#   2. 词库全字集和词库常用都要生效：改 tigress_full.custom.yaml。
-#   3. 四个方案都要生效：改 tiger_base.custom.yaml。
+#   1. 只改词库方案：改本文件。
+#   2. 虎码方案都要生效：改 tiger_base.custom.yaml。
 
 patch:
-  __include: tigress_full.custom:/patch
+  __include: tiger_base.custom:/patch
   translator/dictionary: tigress.extended #引入增补自定词典，这个不要改动

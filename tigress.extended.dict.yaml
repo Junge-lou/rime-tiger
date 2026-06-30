@@ -7,9 +7,9 @@ version: "2026.06.22"
 sort: by_weight
 use_preset_vocabulary: false
 import_tables:
-  - tigress.common
-  - tigress_ci.common
-  - tigress_simp_ci.common
+  - tigress
+  - tigress_ci
+  - tigress_simp_ci
   - tigress.user
 
 columns:

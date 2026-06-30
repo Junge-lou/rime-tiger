@@ -23,6 +23,15 @@ const {
   updateSquirrelConfig,
   updateWeaselConfig,
 } = appCore || {};
+const previewModel = window.RimeSkinPreviewModel || {};
+const {
+  DEFAULT_PREVIEW_CANDIDATES = [],
+  DEFAULT_PREVIEW_CODE = 'nihao',
+  DEFAULT_PREVIEW_CANDIDATES_TEXT = '',
+  applyAlpha,
+  markerBehavior,
+  previewCandidateItems: parsePreviewCandidateItems,
+} = previewModel;
 
 const BACKUP_ROOT = 'Rime皮肤编辑器备份';
 const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -154,7 +163,7 @@ const PREVIEW_CANDIDATES = [
   { label: '4', text: '候选文本比较长', comment: '长词' },
   { label: '5', text: '候選', comment: '异体' },
 ];
-const PREVIEW_INPUT_CODE = 'ni hao';
+const PREVIEW_SETTINGS_STORAGE_KEY = 'rimeSkinEditor.previewSettings.v1';
 
 const state = {
   capability: null,
@@ -187,6 +196,9 @@ const state = {
   pendingActiveDraft: null,
   draftSkin: null,
   previewActiveCandidateIndex: 0,
+  previewScale: 100,
+  previewCode: DEFAULT_PREVIEW_CODE,
+  previewCandidatesText: DEFAULT_PREVIEW_CANDIDATES_TEXT,
   backups: [],
   heartbeatTimer: null,
   closeRequested: false,
@@ -223,6 +235,11 @@ function bindDom() {
     'exportSkinButton',
     'skinImportFile',
     'previewPlatform',
+    'previewScale',
+    'previewScaleValue',
+    'previewCode',
+    'previewCandidates',
+    'resetPreviewSettingsButton',
     'previewStage',
     'previewPreedit',
     'candidatePreview',
@@ -233,6 +250,7 @@ function bindDom() {
     'commentFontFace',
     'numberStyle',
     'numberSeparator',
+    'candidateMarkerField',
     'candidateMarker',
     'preeditVisibility',
     'fontPoint',
@@ -319,6 +337,7 @@ async function initialize() {
   state.selectedPlatform = state.preferredPlatform === 'weasel' ? 'weasel' : 'squirrel';
   state.configs.squirrel = emptyConfig('squirrel');
   state.configs.weasel = emptyConfig('weasel');
+  loadPreviewSettings();
   populateFontOptions();
   bindEvents();
   if (localSession) {
@@ -339,6 +358,10 @@ function bindEvents() {
   dom.importSkinButton.addEventListener('click', () => dom.skinImportFile.click());
   dom.exportSkinButton.addEventListener('click', exportCurrentSkin);
   dom.skinImportFile.addEventListener('change', importSkinFromFile);
+  dom.previewScale.addEventListener('input', updatePreviewScale);
+  dom.previewCode.addEventListener('input', updatePreviewCode);
+  dom.previewCandidates.addEventListener('input', updatePreviewCandidates);
+  dom.resetPreviewSettingsButton.addEventListener('click', resetPreviewSettings);
   dom.setActiveButton.addEventListener('click', setActiveSkin);
   dom.saveButton.addEventListener('click', saveCurrentSkin);
   dom.copyButton.addEventListener('click', copyCurrentSkin);
@@ -945,6 +968,7 @@ function renderEditor() {
   syncSelect(dom.numberStyle, layout.numberStyle, numberStyleOptionLabel(layout));
   syncSelect(dom.numberSeparator, layout.numberSeparator, numberSeparatorOptionLabel(layout));
   syncSelect(dom.candidateMarker, layout.markText);
+  syncCandidateMarkerControl();
   dom.preeditVisibility.value = layout.preeditVisibility;
   setRange(dom.fontPoint, dom.fontPointNumber, dom.fontPointValue, layout.fontPoint);
   setRange(dom.labelFontPoint, dom.labelFontPointNumber, dom.labelFontPointValue, layout.labelFontPoint);
@@ -970,12 +994,34 @@ function renderEditor() {
   for (const [role, label] of COLOR_CONTROLS) {
     const wrapper = document.createElement('label');
     const color = skin.colors?.[role] || DEFAULT_COLORS[role] || DEFAULT_COLORS.back;
+    wrapper.className = 'color-control';
+    if (role === 'hilitedMark' && state.selectedPlatform !== 'weasel') {
+      wrapper.classList.add('disabled-control');
+      wrapper.title = '鼠须管不支持小狼毫的 hilited_mark_color 候选标记。';
+    }
     wrapper.innerHTML = `<span>${label}</span>`;
     const input = document.createElement('input');
     input.type = 'color';
     input.value = rgbaToCssHex(color);
+    input.disabled = role === 'hilitedMark' && state.selectedPlatform !== 'weasel';
     input.addEventListener('input', () => updateDraftColor(role, cssHexToRgba(input.value)));
-    wrapper.append(input);
+    const alphaRow = document.createElement('div');
+    alphaRow.className = 'alpha-row';
+    const alpha = document.createElement('input');
+    alpha.type = 'range';
+    alpha.min = '0';
+    alpha.max = '255';
+    alpha.step = '1';
+    alpha.value = String(color.a ?? 255);
+    alpha.disabled = role === 'hilitedMark' && state.selectedPlatform !== 'weasel';
+    const alphaValue = document.createElement('output');
+    alphaValue.value = String(color.a ?? 255);
+    alpha.addEventListener('input', () => {
+      alphaValue.value = alpha.value;
+      updateDraftAlpha(role, Number(alpha.value));
+    });
+    alphaRow.append(alpha, alphaValue);
+    wrapper.append(input, alphaRow);
     dom.colorControls.append(wrapper);
   }
 }
@@ -992,6 +1038,13 @@ function renderPreview() {
 
   dom.previewStage.style.fontFamily = layout.fontFace;
   dom.previewStage.style.fontSize = `${layout.fontPoint}px`;
+  dom.previewStage.style.setProperty('--preview-scale', String(state.previewScale / 100));
+  if (dom.previewScale) dom.previewScale.value = String(state.previewScale);
+  if (dom.previewScaleValue) dom.previewScaleValue.textContent = `${state.previewScale}%`;
+  if (dom.previewCode && dom.previewCode.value !== state.previewCode) dom.previewCode.value = state.previewCode;
+  if (dom.previewCandidates && dom.previewCandidates.value !== state.previewCandidatesText) {
+    dom.previewCandidates.value = state.previewCandidatesText;
+  }
 
   preedit.textContent = preeditTextForLayout(layout);
   preedit.hidden = !shouldShowPreedit(layout);
@@ -1056,6 +1109,16 @@ function renderBackupList() {
   }
 }
 
+function syncCandidateMarkerControl() {
+  if (!dom.candidateMarker) return;
+  const isWeasel = state.selectedPlatform === 'weasel';
+  dom.candidateMarker.disabled = !isWeasel;
+  dom.candidateMarker.title = isWeasel
+    ? ''
+    : '鼠须管不支持小狼毫的 style/mark_text 候选标记。';
+  dom.candidateMarkerField?.classList.toggle('disabled-control', !isWeasel);
+}
+
 function updateDraftText(field, value) {
   if (!state.draftSkin) return;
   state.draftSkin[field] = value;
@@ -1076,6 +1139,62 @@ function updateDraftId(value) {
     }
   }
   renderSkinList();
+}
+
+function updatePreviewScale() {
+  state.previewScale = clampNumber(dom.previewScale.value, Number(dom.previewScale.min), Number(dom.previewScale.max));
+  savePreviewSettings();
+  renderPreview();
+}
+
+function updatePreviewCode() {
+  state.previewCode = dom.previewCode.value;
+  savePreviewSettings();
+  renderPreview();
+}
+
+function updatePreviewCandidates() {
+  state.previewCandidatesText = dom.previewCandidates.value;
+  state.previewActiveCandidateIndex = Math.min(
+    state.previewActiveCandidateIndex,
+    Math.max(0, previewCandidateItems().length - 1),
+  );
+  savePreviewSettings();
+  renderPreview();
+}
+
+function loadPreviewSettings() {
+  try {
+    const raw = localStorage.getItem(PREVIEW_SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (Number.isFinite(Number(saved.scale))) state.previewScale = clampNumber(Number(saved.scale), 75, 500);
+    if (typeof saved.code === 'string') state.previewCode = saved.code;
+    if (typeof saved.candidates === 'string') state.previewCandidatesText = saved.candidates;
+  } catch (error) {
+    console.warn('Failed to load preview settings', error);
+  }
+}
+
+function savePreviewSettings() {
+  try {
+    localStorage.setItem(PREVIEW_SETTINGS_STORAGE_KEY, JSON.stringify({
+      scale: state.previewScale,
+      code: state.previewCode,
+      candidates: state.previewCandidatesText,
+    }));
+  } catch (error) {
+    console.warn('Failed to save preview settings', error);
+  }
+}
+
+function resetPreviewSettings() {
+  state.previewScale = 100;
+  state.previewCode = DEFAULT_PREVIEW_CODE;
+  state.previewCandidatesText = DEFAULT_PREVIEW_CANDIDATES_TEXT;
+  state.previewActiveCandidateIndex = 0;
+  savePreviewSettings();
+  renderPreview();
 }
 
 function updateLayoutMode() {
@@ -1149,6 +1268,10 @@ function updateNumberFormat(source = 'all') {
 
 function updateCandidateMarker() {
   if (!state.draftSkin) return;
+  if (state.selectedPlatform !== 'weasel') {
+    syncCandidateMarkerControl();
+    return;
+  }
   state.draftSkin.layout ||= {};
   if (dom.candidateMarker.value === CUSTOM_MARKER) {
     const current = state.draftSkin.layout.markText || '';
@@ -1228,6 +1351,16 @@ function updateDraftColor(role, color) {
     ...color,
     a: hasExplicitColor ? previousAlpha : defaultAlpha === 0 ? 255 : (defaultAlpha ?? color.a ?? 255),
   };
+  renderPreview();
+}
+
+function updateDraftAlpha(role, alpha) {
+  if (!state.draftSkin) return;
+  state.draftSkin.colors ||= {};
+  const color = state.draftSkin.colors[role] || DEFAULT_COLORS[role] || DEFAULT_COLORS.back;
+  state.draftSkin.colors[role] = typeof applyAlpha === 'function'
+    ? applyAlpha(color, alpha)
+    : { ...color, a: clampNumber(alpha, 0, 255) };
   renderPreview();
 }
 
@@ -1886,7 +2019,14 @@ function downloadTextFile(filename, text) {
 }
 
 function previewNodes(layout, colors) {
-  return PREVIEW_CANDIDATES.map((item, index) => createCandidateNode(item, layout, colors, index));
+  return previewCandidateItems().map((item, index) => createCandidateNode(item, layout, colors, index));
+}
+
+function previewCandidateItems() {
+  if (typeof parsePreviewCandidateItems === 'function') {
+    return parsePreviewCandidateItems(state.previewCandidatesText, DEFAULT_PREVIEW_CANDIDATES.length ? DEFAULT_PREVIEW_CANDIDATES : PREVIEW_CANDIDATES);
+  }
+  return PREVIEW_CANDIDATES;
 }
 
 function colorsForPreview(skinColors = {}) {
@@ -1912,11 +2052,15 @@ function createCandidateNode(item, layout, colors, index) {
   candidate.className = classes.join(' ');
   const textMarker = String(layout.markText || '');
   const hilitedMarkColor = colorRole(colors, 'hilitedMark', 'hilitedCandidateLabel', 'hilitedLabel', 'label');
-  const hasWin11Marker = !textMarker && colors.__explicitHilitedMark && colorIsVisible(hilitedMarkColor);
-  const showWin11MarkerSlot = hasWin11Marker && (active || layout.mode === 'stacked');
-  const showWin11Marker = hasWin11Marker && active;
-  const showTextMarkerSlot = Boolean(textMarker && (active || layout.mode === 'stacked'));
-  const showMarkerSlot = showTextMarkerSlot || showWin11MarkerSlot;
+  const marker = typeof markerBehavior === 'function'
+    ? markerBehavior(state.selectedPlatform, layout, { hilitedMark: hilitedMarkColor }, active)
+    : {
+        type: !textMarker && colorIsVisible(hilitedMarkColor) ? 'win11' : textMarker ? 'text' : 'none',
+        hasSlot: Boolean((!textMarker && colorIsVisible(hilitedMarkColor)) || textMarker),
+        visible: active,
+        text: textMarker,
+      };
+  const showMarkerSlot = marker.hasSlot && (active || layout.mode === 'stacked');
   candidate.style.display = layout.mode === 'stacked' ? 'grid' : 'inline-grid';
   candidate.style.gridTemplateColumns = candidateGridColumns(showMarkerSlot);
   candidate.style.width = layout.mode === 'stacked' ? '100%' : '';
@@ -1948,10 +2092,10 @@ function createCandidateNode(item, layout, colors, index) {
 
   const mark = document.createElement('span');
   mark.className = 'candidate-mark';
-  if (showWin11MarkerSlot) {
+  if (showMarkerSlot && marker.type === 'win11') {
     mark.className = 'candidate-mark win11-mark';
     mark.textContent = '';
-    mark.style.visibility = active ? 'visible' : 'hidden';
+    mark.style.visibility = marker.visible ? 'visible' : 'hidden';
     mark.style.backgroundColor = rgbaToCss(hilitedMarkColor);
     mark.style.borderRadius = `${layout.hilitedCornerRadius}px`;
     mark.style.display = 'inline-block';
@@ -1961,8 +2105,8 @@ function createCandidateNode(item, layout, colors, index) {
     mark.style.height = win11MarkerHeight(layout);
     mark.style.padding = '0';
   } else {
-    mark.textContent = textMarker;
-    mark.style.visibility = active ? 'visible' : 'hidden';
+    mark.textContent = marker.text || textMarker;
+    mark.style.visibility = marker.visible ? 'visible' : 'hidden';
     mark.style.color = rgbaToCss(active
       ? hilitedMarkColor
       : colorRole(colors, 'label'));
@@ -2052,11 +2196,12 @@ function shouldShowPreedit(layout) {
 }
 
 function preeditTextForLayout(layout) {
-  if (layout.preeditType === 'preview') return PREVIEW_CANDIDATES[0].text;
+  const items = previewCandidateItems();
+  if (layout.preeditType === 'preview') return items[0]?.text || '';
   if (layout.preeditType === 'preview_all') {
-    return PREVIEW_CANDIDATES.map((item) => item.text).join(' ');
+    return items.map((item) => item.text).join(' ');
   }
-  return PREVIEW_INPUT_CODE;
+  return state.previewCode || DEFAULT_PREVIEW_CODE;
 }
 
 function labelForCandidate(item, layout, index) {

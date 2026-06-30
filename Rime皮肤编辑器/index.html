@@ -71,6 +71,32 @@
                 <div class="candidate-row"></div>
               </div>
             </div>
+            <details class="preview-settings" open>
+              <summary>预览设置</summary>
+              <div class="preview-tools">
+                <label>
+                  <span>缩放</span>
+                  <input id="previewScale" type="range" min="75" max="500" step="25" value="100">
+                  <output id="previewScaleValue">100%</output>
+                </label>
+                <label>
+                  <span>编码</span>
+                  <input id="previewCode" type="text" value="nihao">
+                </label>
+                <label class="preview-candidates-field">
+                  <span class="label-with-help">
+                    候选
+                    <span class="help-dot" tabindex="0" title="每行一个候选。只写词条则不显示注释；词条和注释可用 Tab、竖线 |、英文逗号 , 或两个以上空格分隔。例如：你好|常用。">?</span>
+                  </span>
+                  <textarea id="previewCandidates" rows="4">你好	常用
+你	单字
+拟
+候选文本比较长	长词
+候選	异体</textarea>
+                </label>
+                <button id="resetPreviewSettingsButton" type="button">恢复默认设置</button>
+              </div>
+            </details>
           </section>
 
           <details class="panel controls" open>
@@ -129,7 +155,7 @@
                   <option value="__custom_separator__">自定义...</option>
                 </select>
               </label>
-              <label>
+              <label id="candidateMarkerField">
                 <span>候选标记</span>
                 <select id="candidateMarker">
                   <option value="">无</option>
@@ -321,6 +347,7 @@
     </div>
 
     <script src="./src/core.js"></script>
+    <script src="./src/preview-model.js"></script>
     <script src="./src/app.js"></script>
   </body>
 </html>

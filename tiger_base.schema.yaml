@@ -1,7 +1,7 @@
 # Rime 虎码公共基础配置
 # encoding: utf-8
 #
-# 这份文件是给下面四个方案 __include 的“共同底座”。
+# 这份文件是给虎码方案 __include 的“共同底座”。
 # Rime 的方案信息字段叫 schema，不叫 scheme；下面已经有 schema:
 # 但 tiger_base 不是给用户切换输入用的方案，不要把 tiger_base 加进
 # default.custom.yaml 的 schema_list。
@@ -10,28 +10,25 @@
 #
 # 配置关系图：
 #   tiger_base.schema.yaml
-#   ├─ tiger_full.schema.yaml          单字 · 全字集（父集）
-#   │  └─ tiger.schema.yaml            单字 · 常用字
-#   └─ tigress_full.schema.yaml        词库 · 全字集（父集）
-#      └─ tigress.schema.yaml          词库 · 常用字
+#   ├─ tiger.schema.yaml               单字用户方案
+#   └─ tigress.schema.yaml             词库用户方案
 #
 # 修改指南：
-#   1. 四个方案都要生效：改 tiger_base.schema.yaml。
-#   2. 单字全字集和单字常用都要生效：改 tiger_full.schema.yaml。
-#   3. 只改单字常用：改 tiger.schema.yaml。
-#   4. 词库全字集和词库常用都要生效：改 tigress_full.schema.yaml。
-#   5. 只改词库常用：改 tigress.schema.yaml。
-#   6. 候选数、样式、个人补丁优先改对应的 *.custom.yaml。
+#   1. 虎码方案都要生效：改 tiger_base.schema.yaml。
+#   2. 只改单字方案：改 tiger.schema.yaml。
+#   3. 只改词库方案：改 tigress.schema.yaml。
+#   4. 候选数、样式、个人补丁优先改对应的 *.custom.yaml。
 
 schema:
   author:
     - {}
   dependencies:
+    - core2022 # 常用字过滤工具方案
     - PY_c  # 拼音方案
     - easy_english # 英文
   description: |
     虎码公共基础配置。
-    仅供 tiger、tiger_full、tigress、tigress_full 继承；不要加入方案列表。
+    仅供 tiger、tigress 继承；不要加入方案列表。
   name: "虎码公共基础配置（勿选）"
   schema_id: tiger_base
   version: 0.9
@@ -41,6 +38,8 @@ switches: # 0 默认关，1 默认开
   - name: ascii_mode
     reset: 0
     states: [ 中文, "西文 Shift/Caps" ]  #中英文状态
+  - name: extended_char
+    states: [ 常用字, "全字集 Ctrl+H" ]
   - name: pinyin  #拼音滤镜
     states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
   - name: emoji_cn  #emoji滤镜
@@ -112,6 +111,7 @@ engine:
 
 
   filters:
+    - lua_filter@*core2022_filter #常用字/全字集过滤；放在简繁前
     # - charset_filter@utf8
     # - charset_filter@gbk
     # - charset_filter@gb2312
@@ -183,6 +183,8 @@ key_binder:
     - { accept: "Control+i", toggle: emoji_cn, when: composing }  # PC emoji开关
     - { accept: "Control+u", toggle: charset_comment_filter, when: composing }  # PC Unicode分区开关
     - { accept: "Control+y", toggle: udpf_switch, when: composing }  #PC Unicode编码开关
+    - { accept: "Control+h", toggle: extended_char, when: composing } # PC 字集开关
+    - { accept: "Control+Shift+H", toggle: extended_char, when: composing } # PC 字集开关
     - { accept: "Control+j", toggle: chaifen, when: composing } # PC 拆分滤镜开关
     # - { when: composing, accept: '&', toggle: emoji_cn } # 手机 emoji开关
     # - { when: composing, accept: '*', toggle: simplification } # 手机 繁简开关
@@ -191,6 +193,7 @@ key_binder:
     # - { when: composing, accept: '#', toggle: charset_comment_filter } # 手机 Unicode分区开关2
     # - { accept: "%", toggle: udpf_switch, when: composing }  #手机 Unicode编码开关
     # - { accept: "+", toggle: udpf_switch, when: composing }  #手机 Unicode编码开关
+    # - { when: composing, accept: "_", toggle: extended_char } # 手机 字集开关
     # - { when: composing, accept: '"', toggle: chaifen } # 手机 拆分滤镜开关
     - { when: always, accept: "Control+period" , toggle: ascii_punct } # 中英标点切换
     - { when: always, accept: "Shift+space" , toggle: full_shape } # 全半角切换

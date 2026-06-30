@@ -9,10 +9,8 @@
 #
 # 当前虎码补丁继承关系：
 #   tiger_base.custom.yaml
-#   ├─ tiger_full.custom.yaml          单字 · 全字集补丁，父配置
-#   │  └─ tiger.custom.yaml            单字 · 常用字补丁
-#   └─ tigress_full.custom.yaml        词库 · 全字集补丁，父配置
-#      └─ tigress.custom.yaml          词库 · 常用字补丁
+#   ├─ tiger.custom.yaml               单字用户方案补丁
+#   └─ tigress.custom.yaml             词库用户方案补丁
 #
 # 文件里已有 patch 时，把新配置加到原来的 patch 下面，不要写第二个 patch。
 
@@ -21,19 +19,15 @@ patch:
   # 一、继承上级补丁
   # ----------------
   # tiger_base.custom.yaml 不写 __include。
-  # tiger_full.custom.yaml 写：__include: tiger_base.custom:/patch
-  # tiger.custom.yaml 写：__include: tiger_full.custom:/patch
-  # tigress_full.custom.yaml 写：__include: tiger_base.custom:/patch
-  # tigress.custom.yaml 写：__include: tigress_full.custom:/patch
-  __include: tiger_full.custom:/patch
+  # tiger.custom.yaml 写：__include: tiger_base.custom:/patch
+  # tigress.custom.yaml 写：__include: tiger_base.custom:/patch
+  __include: tiger_base.custom:/patch
 
 
   # 二、词典入口
   # ------------
   # tiger：tiger.extended
-  # tiger_full：tiger_full.extended
   # tigress：tigress.extended
-  # tigress_full：tigress_full.extended
   translator/dictionary: tiger.extended
 
 
@@ -61,30 +55,32 @@ patch:
   # ----------------
   # switches 是列表，下标从 0 开始。这里按 tiger_base.schema.yaml 当前顺序举例。
   switches/@0/reset: 0  # ascii_mode：0 中文，1 西文
-  # switches/@1/reset: 0  # pinyin：若要每次重置为关，再启用这一行
-  # switches/@2/reset: 0  # emoji_cn：若要每次重置为关，再启用这一行
-  # switches/@3/reset: 0  # input_speed_stat：若要每次重置为关，再启用这一行
-  # switches/@4/reset: 0  # chaifen：若要每次重置为关，再启用这一行
-  # switches/@5/reset: 0  # simplification：若要每次重置为简体，再启用这一行
-  # switches/@6/reset: 0  # mars：若要每次重置为关，再启用这一行
-  # switches/@7/reset: 0  # charset_comment_filter：若要每次重置为关，再启用这一行
-  # switches/@8/reset: 0  # udpf_switch：若要每次重置为关，再启用这一行
-  # switches/@9/reset: 0  # ascii_punct：若要每次重置为中文标点，再启用这一行
-  # switches/@10/reset: 0  # full_shape：若要每次重置为半角，再启用这一行
-  # switches/@11/reset: 0  # rime_skin_editor：皮肤编辑器入口，保持为 0，触发后会自动复位
+  # switches/@1/reset: 0  # extended_char：0 常用字，1 全字集；通常不写 reset，便于保存状态
+  # switches/@2/reset: 0  # pinyin：若要每次重置为关，再启用这一行
+  # switches/@3/reset: 0  # emoji_cn：若要每次重置为关，再启用这一行
+  # switches/@4/reset: 0  # input_speed_stat：若要每次重置为关，再启用这一行
+  # switches/@5/reset: 0  # chaifen：若要每次重置为关，再启用这一行
+  # switches/@6/reset: 0  # simplification：若要每次重置为简体，再启用这一行
+  # switches/@7/reset: 0  # mars：若要每次重置为关，再启用这一行
+  # switches/@8/reset: 0  # charset_comment_filter：若要每次重置为关，再启用这一行
+  # switches/@9/reset: 0  # udpf_switch：若要每次重置为关，再启用这一行
+  # switches/@10/reset: 0  # ascii_punct：若要每次重置为中文标点，再启用这一行
+  # switches/@11/reset: 0  # full_shape：若要每次重置为半角，再启用这一行
+  # switches/@12/reset: 0  # rime_skin_editor：皮肤编辑器入口，保持为 0，触发后会自动复位
   # 也可以改开关显示文字，建议只在“切换后的状态”写一次快捷键。
   switches/@0/states: [ 中文, "西文 Shift/Caps" ]
-  switches/@1/states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
-  switches/@2/states: [ 🈚表情, "🈶表情 Ctrl+I" ]
-  switches/@3/states: [ 测速关, 测速开 ]
-  switches/@4/states: [ "拆隐", "拆显 Ctrl+J Ctrl+Shift+Enter上屏拆分" ]
-  switches/@5/states: [ 简中, "繁中 Ctrl+O" ]
-  switches/@6/states: [ '火星文 关 \chol', '火星文 开 \chol' ]
-  switches/@7/states: [ U区关, "U区开 Ctrl+U" ]
-  switches/@8/states: [ U编关, "U编开 Ctrl+Y" ]
-  switches/@9/states: [ 。，, "．， Ctrl+." ]
-  switches/@10/states: [ 半角, "全角 Shift+Space" ]
-  switches/@11/states: [ 皮肤编辑, 打开皮肤编辑 ]
+  switches/@1/states: [ 常用字, "全字集 Ctrl+H" ]
+  switches/@2/states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]
+  switches/@3/states: [ 🈚表情, "🈶表情 Ctrl+I" ]
+  switches/@4/states: [ 测速关, 测速开 ]
+  switches/@5/states: [ "拆隐", "拆显 Ctrl+J Ctrl+Shift+Enter上屏拆分" ]
+  switches/@6/states: [ 简中, "繁中 Ctrl+O" ]
+  switches/@7/states: [ '火星文 关 \chol', '火星文 开 \chol' ]
+  switches/@8/states: [ U区关, "U区开 Ctrl+U" ]
+  switches/@9/states: [ U编关, "U编开 Ctrl+Y" ]
+  switches/@10/states: [ 。，, "．， Ctrl+." ]
+  switches/@11/states: [ 半角, "全角 Shift+Space" ]
+  switches/@12/states: [ 皮肤编辑, 打开皮肤编辑 ]
 
 
   # 六、空格和常用快捷键
@@ -103,6 +99,8 @@ patch:
     - { accept: "Control+i", toggle: emoji_cn, when: composing }  # emoji
     - { accept: "Control+u", toggle: charset_comment_filter, when: composing }  # U 区
     - { accept: "Control+y", toggle: udpf_switch, when: composing }  # U 编码
+    - { accept: "Control+h", toggle: extended_char, when: composing }  # 字集
+    - { accept: "Control+Shift+H", toggle: extended_char, when: composing }  # 字集
     - { accept: "Control+j", toggle: chaifen, when: composing }  # 拆分
     - { accept: "Control+period", toggle: ascii_punct, when: always }  # 中英标点
     - { accept: "Shift+space", toggle: full_shape, when: always }  # 全半角
@@ -130,10 +128,8 @@ patch:
   # ----------------------
   # 这段适合 default.custom.yaml。不要把 tiger_base 加进去。
   schema_list:
-    - { schema: tiger }  # 单字常用
-    - { schema: tiger_full }  # 单字全字集
-    - { schema: tigress }  # 词库常用
-    - { schema: tigress_full }  # 词库全字集
+    - { schema: tiger }  # 单字
+    - { schema: tigress }  # 词库
     - { schema: PY_c }  # 拼音
   switcher/hotkeys:
     - "Control+grave"  # Ctrl+` 打开方案菜单
@@ -141,6 +137,7 @@ patch:
   switcher/save_options:
     - ascii_punct  # 保存中英标点状态
     - full_shape  # 保存全半角状态
+    - extended_char  # 保存常用字/全字集状态
     - simplification  # 保存简繁状态
     - pinyin  # 保存拼音提示状态
     - emoji_cn  # 保存 emoji 状态

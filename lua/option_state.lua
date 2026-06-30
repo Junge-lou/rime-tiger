@@ -162,6 +162,20 @@ function M.sync_many(env, names, force)
   return true
 end
 
+function M.save_many_from_context(env, names, force)
+  local context = sync_context(env)
+  if not context then
+    return false
+  end
+
+  load(force)
+  for _, name in ipairs(names or {}) do
+    values[name] = context:get_option(name) and true or false
+  end
+  save()
+  return true
+end
+
 function M._test_reset()
   loaded = true
   values = {}

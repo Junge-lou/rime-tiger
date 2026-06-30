@@ -9,6 +9,7 @@ local syncing = false
 local COMMON_OPTIONS = {
   "ascii_punct",
   "full_shape",
+  "extended_char",
   "simplification",
   "pinyin",
   "emoji_cn",
@@ -71,7 +72,7 @@ function M.init(env)
       end
     end)
   end
-  sync_options(env, true)
+  option_state.save_many_from_context(env, option_names(env), true)
 end
 
 function M.fini(env)
@@ -90,6 +91,10 @@ end
 
 function M._test_options()
   return COMMON_OPTIONS
+end
+
+function M._test_option_names(schema_id)
+  return SCHEMA_OPTIONS[schema_id] or COMMON_OPTIONS
 end
 
 return M

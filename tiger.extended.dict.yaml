@@ -7,7 +7,7 @@ version: "2026.06.22"
 sort: by_weight
 use_preset_vocabulary: false
 import_tables:
-  - tiger.common
+  - tiger
   - tiger.user
 
 columns:

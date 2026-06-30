@@ -1,18 +1,14 @@
-# 这份文件是四个虎码方案的“共同补丁底座”。
+# 这份文件是虎码方案的“共同补丁底座”。
 #
 # 补丁关系图：
 #   tiger_base.custom.yaml
-#   ├─ tiger_full.custom.yaml          单字 · 全字集补丁（父集）
-#   │  └─ tiger.custom.yaml            单字 · 常用字补丁
-#   └─ tigress_full.custom.yaml        词库 · 全字集补丁（父集）
-#      └─ tigress.custom.yaml          词库 · 常用字补丁
+#   ├─ tiger.custom.yaml               单字用户方案补丁
+#   └─ tigress.custom.yaml             词库用户方案补丁
 #
 # 修改指南：
-#   1. 四个方案都要生效的候选数、样式、按键：改本文件。
-#   2. 单字全字集和单字常用都要生效：改 tiger_full.custom.yaml。
-#   3. 只改单字常用：改 tiger.custom.yaml。
-#   4. 词库全字集和词库常用都要生效：改 tigress_full.custom.yaml。
-#   5. 只改词库常用：改 tigress.custom.yaml。
+#   1. 虎码方案都要生效的候选数、样式、按键：改本文件。
+#   2. 只改单字方案：改 tiger.custom.yaml。
+#   3. 只改词库方案：改 tigress.custom.yaml。
 
 #下面的 #号 是注释符，注释了就无效了，删掉即可生效
 

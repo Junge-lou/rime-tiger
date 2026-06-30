@@ -1048,7 +1048,7 @@ function styleFromSkin(skin, platform) {
   if (layout.commentFontFace !== undefined) style.comment_font_face = layout.commentFontFace;
   if (layout.commentFontPoint !== undefined) style.comment_font_point = layout.commentFontPoint;
   if (layout.labelFormat !== undefined) style.label_format = layout.labelFormat;
-  if (layout.markText !== undefined) style.mark_text = layout.markText;
+  if (platform === 'weasel' && layout.markText !== undefined) style.mark_text = layout.markText;
   if (layout.inlinePreedit !== undefined) style.inline_preedit = layout.inlinePreedit;
   if (layout.preeditType !== undefined) style.preedit_type = layout.preeditType;
 

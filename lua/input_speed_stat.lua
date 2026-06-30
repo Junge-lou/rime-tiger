@@ -95,9 +95,13 @@ local function stats_file(env)
   return base .. "/lua/input_speed_stat_data.lua"
 end
 
+local function legacy_schema_ids()
+  return { "tiger", "tigress" }
+end
+
 local function legacy_stats_files(env)
   local base = rime_api.get_user_data_dir()
-  local ids = { "tiger", "tiger_full", "tigress", "tigress_full" }
+  local ids = legacy_schema_ids()
   local files = {}
   if env and env.engine and env.engine.schema and env.engine.schema.schema_id then
     table.insert(ids, env.engine.schema.schema_id)
@@ -278,14 +282,25 @@ local function add_period_seconds(seconds)
   state.stats.total.seconds = state.stats.total.seconds + seconds
 end
 
+local function active_session_seconds()
+  if not state.session_active or state.session_chars <= 0 then
+    return 0
+  end
+
+  local duration_ms = state.last_commit_ms - state.session_start_ms
+  if duration_ms <= 0 then
+    return 0
+  end
+  return duration_ms / 1000.0
+end
+
 local function finish_session()
   if not state.session_active or state.session_chars <= 0 then
     state.session_active = false
     return false
   end
 
-  local duration_ms = state.last_commit_ms - state.session_start_ms
-  local seconds = duration_ms / 1000.0
+  local seconds = active_session_seconds()
   if seconds <= 0 then
     state.session_active = false
     return false
@@ -444,7 +459,7 @@ end
 local function speed_summary()
   maybe_finish_idle_session()
   if state.session_active and state.session_chars > 0 then
-    local seconds = (now_ms() - state.session_start_ms) / 1000.0
+    local seconds = active_session_seconds()
     local speed = 0
     if seconds > 0 then
       speed = math.floor(state.session_chars / seconds * 60 + 0.5)
@@ -466,10 +481,20 @@ local function period_summary(label, period)
     string.format("平均速度：%d字/分钟　输入时长：%s", avg_speed(period), format_duration(period.seconds))
 end
 
+local function period_with_active_seconds(period)
+  if active_session_seconds() <= 0 then
+    return period
+  end
+  return {
+    chars = period.chars,
+    seconds = (period.seconds or 0) + active_session_seconds(),
+  }
+end
+
 local function brief_summary()
   maybe_finish_idle_session()
   update_date_stats()
-  return period_summary("今日", state.stats.daily)
+  return period_summary("今日", period_with_active_seconds(state.stats.daily))
 end
 
 local function detail_summaries()
@@ -477,13 +502,13 @@ local function detail_summaries()
   update_date_stats()
   local s = state.stats
   local rows = {}
-  local text, comment = period_summary("今日", s.daily)
+  local text, comment = period_summary("今日", period_with_active_seconds(s.daily))
   table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("本月", s.monthly)
+  text, comment = period_summary("本月", period_with_active_seconds(s.monthly))
   table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("本年", s.yearly)
+  text, comment = period_summary("本年", period_with_active_seconds(s.yearly))
   table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("总计", s.total)
+  text, comment = period_summary("总计", period_with_active_seconds(s.total))
   table.insert(rows, { text = text, comment = comment })
   return rows
 end

@@ -9,38 +9,35 @@
 #
 # 当前虎码继承关系：
 #   tiger_base.schema.yaml
-#   ├─ tiger_full.schema.yaml          单字 · 全字集，父配置
-#   │  └─ tiger.schema.yaml            单字 · 常用字
-#   └─ tigress_full.schema.yaml        词库 · 全字集，父配置
-#      └─ tigress.schema.yaml          词库 · 常用字
+#   ├─ tiger.schema.yaml               单字用户方案
+#   └─ tigress.schema.yaml             词库用户方案
 #
-# 全字集包含常用字，所以常用字继承全字集。
+# tiger / tigress 底层加载全字集词典，常用字/全字集由 extended_char 开关控制。
 
 
 # 一、继承上级 schema
 # ------------------
 # tiger_base.schema.yaml 不写 __include。
-# tiger_full.schema.yaml 写：__include: tiger_base.schema:/
-# tiger.schema.yaml 写：__include: tiger_full.schema:/
-# tigress_full.schema.yaml 写：__include: tiger_base.schema:/
-# tigress.schema.yaml 写：__include: tigress_full.schema:/
-__include: tiger_full.schema:/
+# tiger.schema.yaml 写：__include: tiger_base.schema:/
+# tigress.schema.yaml 写：__include: tiger_base.schema:/
+__include: tiger_base.schema:/
 
 
 # 二、方案基本信息
 # ----------------
 schema:
   schema_id: tiger  # 必须和文件名前缀一致：tiger.schema.yaml -> tiger
-  name: "虎码单字 9767字"  # 切换方案时显示的名字，尽量短，不用逗号
+  name: "虎码单字"  # 切换方案时显示的名字，尽量短，不用逗号
   version: 0.9
   author:
     - {}
   dependencies:
+    - core2022  # 常用字过滤工具方案
     - PY_c  # 拼音反查依赖
     - easy_english  # 临时英文依赖
   description: |
     虎码官方单字
-    字集：9767 字
+    字典：全字集 99144 字；默认常用字过滤，Ctrl+H 切换全字集
     敲 ` 键进入拼音反查
 
 
@@ -52,6 +49,8 @@ switches:
   - name: ascii_mode
     reset: 0
     states: [ 中文, "西文 Shift/Caps" ]  # 中英文状态
+  - name: extended_char
+    states: [ 常用字, "全字集 Ctrl+H" ]  # 字集过滤；开为全字集
   - name: pinyin
     states: [ "拼隐", "拼显 Ctrl+P Ctrl+Shift+Enter上屏拼音" ]  # 拼音滤镜
   - name: emoji_cn
@@ -115,6 +114,7 @@ engine:
     - lua_translator@shijian2_translator  # 时间
   filters:
     # - lua_filter@*tigress_user_words*filter  # 词库版用户词过滤与调序；单字版不要加
+    - lua_filter@*core2022_filter  # 常用字/全字集过滤，放在简繁前
     # - charset_filter@gb2312  # 字符集过滤示例
     # - charset_filter@gbk
     # - charset_filter@utf8
@@ -147,7 +147,7 @@ speller:
 # 六、主翻译器
 # ------------
 translator:
-  dictionary: tiger.extended  # 词典入口；常用字用 tiger.extended，全字集用 tiger_full.extended
+  dictionary: tiger.extended  # 词典入口；用全字集词典，常用字由 core2022_filter 过滤
   # prism: tiger  # 可指定棱镜名；通常和 schema_id 一致，没特殊需求可省略
   enable_charset_filter: false  # 允许 charset_filter 工作
   enable_encoder: false  # 允许自动造词编码
@@ -373,13 +373,9 @@ grammar:
 # translator/dictionary 指向的是词典名，不带 .dict.yaml 后缀。
 # 例如 dictionary: tiger.extended 会读取 tiger.extended.dict.yaml。
 #
-# 常用字：
-#   tiger.extended -> tiger.common + tiger.user
-#   tigress.extended -> tigress.common + tigress.user
-#
-# 全字集：
-#   tiger_full.extended -> tiger + tiger.user
-#   tigress_full.extended -> tigress + tigress.user
+# 当前 tiger / tigress 使用全字集词典，常用字由 core2022_filter 过滤：
+#   tiger.extended -> tiger + tiger.user
+#   tigress.extended -> tigress + tigress.user
 #
 # 词典本体配置在 *.dict.yaml 里，常见字段包括：
 #   name、version、sort、use_preset_vocabulary、import_tables、columns、encoder。
@@ -397,7 +393,7 @@ grammar:
 # sort: by_weight  # by_weight 按权重排序；original 保持原顺序
 # use_preset_vocabulary: false  # 是否使用八股文预设词汇
 # import_tables:
-#   - tiger.common  # 引入常用字词典
+#   - tiger  # 引入全字集词典
 #   - tiger.user  # 引入用户自定义词典
 # columns:
 #   - text  # 字或词

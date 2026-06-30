@@ -1,27 +1,25 @@
 # Rime schema: tiger
 # encoding: utf-8
 #
-# 本文件是“单字 · 常用字”方案。
+# 本文件是“单字”方案。
 #
 # 配置来源：
-#   tiger_base.schema.yaml -> tiger_full.schema.yaml -> tiger.schema.yaml
+#   tiger_base.schema.yaml -> tiger.schema.yaml
 #
-# tiger_full 是全字集父配置；本文件只把名称和词典覆盖成常用字。
+# 底层使用全字集词典；常用字/全字集由 extended_char 开关过滤。
 #
 # 修改指南：
-#   1. 只改单字常用：改本文件 / tiger.custom.yaml。
-#   2. 单字全字集和单字常用都要改：改 tiger_full.schema.yaml /
-#      tiger_full.custom.yaml。
-#   3. 四个方案都要改：改 tiger_base.schema.yaml / tiger_base.custom.yaml。
+#   1. 只改单字方案：改本文件 / tiger.custom.yaml。
+#   2. 虎码方案都要改：改 tiger_base.schema.yaml / tiger_base.custom.yaml。
 
-__include: tiger_full.schema:/
+__include: tiger_base.schema:/
 
 schema:
   description: |
     虎码官方单字
-    字集：9767 字
+    字典：全字集 99144 字；默认常用字过滤，Ctrl+H 切换全字集
     敲 ` 鍵進入拼音反查
-  name: "虎码单字 9767字"
+  name: "虎码单字"
   schema_id: tiger
 
 translator:

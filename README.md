@@ -4,17 +4,15 @@
 
 ## 方案列表
 
-本配置把字版和词版都拆成常用版、全字集版两套独立方案：
+本配置保留两个用户常用方案：
 
 - `tiger`：虎码官方单字
-- `tiger_full`：虎码官方单字·全字集
 - `tigress`：虎码官方词库
-- `tigress_full`：虎码官方词库·全字集
 - `PY_c`：拼音方案
 
-常用版和全字集版是完整 schema 切换，不是运行时过滤器切换。旧版常用字模式使用 `lua_filter@core2022` 逐候选过滤；现在改为词典层面拆分，常用版不再生成非常用候选。
+`tiger` 和 `tigress` 底层加载全字集词典，默认开启常用字过滤。按 `Ctrl+H` / `Ctrl+Shift+H` 可以在“常用字”和“全字集”之间切换。这个状态是普通 Rime option：关为常用字，开为全字集；已加入 `switcher/save_options`，并由 `lua/option_sync.lua` / `lua/option_state.lua` 做跨窗口同步。
 
-`lua/core2022_filter.lua` 已删除。`core2022.dict.yaml` 仅作为常用字表数据保留。
+`tiger` / `tigress` 使用同一份全字集词典入口，并通过 `extended_char` 开关在常用字和全字集之间切换。历史全字集独立方案文件已经移除；如果部署后方案菜单仍停在已删除旧方案，请重新选一次 `tiger` 或 `tigress`。
 
 ## 用户词共享
 
@@ -23,7 +21,7 @@
 - `tiger.user.dict.yaml`
 - `tigress.user.dict.yaml`
 
-常用版和全字集版都会导入对应用户层。已经通过旧版 `tigress_user_words.lua` 添加或屏蔽的词，会从旧词库迁移并继续生效。
+单字和词库方案都会导入对应用户层。已经通过旧版 `tigress_user_words.lua` 添加或屏蔽的词，会从旧词库迁移并继续生效。
 
 ## 顿号与符号菜单
 
@@ -41,7 +39,7 @@
 
 ## 空码与符号顶字
 
-`tiger`、`tiger_full`、`tigress`、`tigress_full` 都接入了空码标顶清屏和候选唯一时符号顶字：
+`tiger`、`tigress` 都接入了空码标顶清屏和候选唯一时符号顶字：
 
 - 空码时按符号，会清掉错误编码并吞掉这次符号。
 - 候选唯一时按符号，会先上屏唯一候选，再让该符号继续生效。
@@ -49,7 +47,7 @@
 
 ## 虎词加词、减词、调序
 
-该功能接入 `tigress` 和 `tigress_full`。
+该功能接入 `tigress`。
 
 快捷键：
 
@@ -84,7 +82,7 @@
 
 ## 火星文滤镜
 
-`tiger`、`tiger_full`、`tigress`、`tigress_full`、`PY_c` 都接入了火星文滤镜：
+`tiger`、`tigress`、`PY_c` 都接入了火星文滤镜：
 
 - 在方案选单/选项菜单里切换 `火星文 关 \chol` / `火星文 开 \chol`。
 - 输入 `\chol` 并确认候选，也可以切换火星文开关。

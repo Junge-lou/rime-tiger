@@ -21,12 +21,10 @@ local config = {
     extended_dict = "tigress.user.dict.yaml",
     legacy_migration_sources = {
         "tigress.extended.dict.yaml",
-        "tigress_full.extended.dict.yaml",
     },
     source_dicts = {
         "tigress.user.dict.yaml",
         "tigress.extended.dict.yaml",
-        "tigress_full.extended.dict.yaml",
         "tigress.common.dict.yaml",
         "tigress_ci.common.dict.yaml",
         "tigress_simp_ci.common.dict.yaml",
@@ -140,7 +138,6 @@ end
 local function is_user_layer_dict(filename)
     return filename == config.extended_dict
         or filename == "tigress.extended.dict.yaml"
-        or filename == "tigress_full.extended.dict.yaml"
 end
 
 local function parse_entry(filename, line)

@@ -1,15 +1,14 @@
 # Rime patch: tiger
 #
-# 本文件是“单字 · 常用字”补丁。
+# 本文件是“单字”补丁。
 #
 # 补丁来源：
-#   tiger_base.custom.yaml -> tiger_full.custom.yaml -> tiger.custom.yaml
+#   tiger_base.custom.yaml -> tiger.custom.yaml
 #
 # 修改指南：
-#   1. 只改单字常用：改本文件。
-#   2. 单字全字集和单字常用都要生效：改 tiger_full.custom.yaml。
-#   3. 四个方案都要生效：改 tiger_base.custom.yaml。
+#   1. 只改单字方案：改本文件。
+#   2. 虎码方案都要生效：改 tiger_base.custom.yaml。
 
 patch:
-  __include: tiger_full.custom:/patch
+  __include: tiger_base.custom:/patch
   translator/dictionary: tiger.extended #引入增补自定词典，这个不要改动

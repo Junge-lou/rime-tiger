@@ -260,6 +260,7 @@ summary {
 }
 
 .preview-stage {
+  --preview-scale: 1;
   display: grid;
   justify-content: center;
   align-content: center;
@@ -270,6 +271,87 @@ summary {
   border-radius: 6px;
   background: #151923;
   overflow: auto;
+}
+
+.preview-settings {
+  margin-top: 10px;
+}
+
+.preview-settings > summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 600;
+  user-select: none;
+}
+
+.preview-tools {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(160px, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.preview-tools label {
+  display: grid;
+  gap: 6px;
+}
+
+.preview-candidates-field {
+  grid-column: 1 / -1;
+}
+
+.preview-tools textarea {
+  min-height: 86px;
+  resize: vertical;
+  font-family: Consolas, "Microsoft YaHei", sans-serif;
+  line-height: 1.45;
+}
+
+.label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.help-dot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+}
+
+.help-dot::after {
+  content: "每行一个候选。只写词条则不显示注释；词条和注释可用 Tab、竖线 |、英文逗号 , 或两个以上空格分隔。";
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  width: min(320px, 72vw);
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 20%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.help-dot:hover::after,
+.help-dot:focus::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .preview-preedit {
@@ -290,6 +372,7 @@ summary {
 
 .candidate-preview {
   display: inline-block;
+  box-sizing: content-box;
   width: fit-content;
   max-width: 100%;
   min-height: 0;
@@ -300,6 +383,8 @@ summary {
   padding: 5px;
   box-shadow: 0 10px 26px rgb(15 23 42 / 12%);
   overflow: hidden;
+  transform: scale(var(--preview-scale));
+  transform-origin: center;
 }
 
 .candidate-row {
@@ -385,6 +470,27 @@ input[type="color"] {
   border-radius: 6px;
   background: #ffffff;
   padding: 3px;
+}
+
+.color-control {
+  gap: 7px;
+}
+
+.alpha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: center;
+}
+
+.alpha-row output {
+  color: #64748b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.disabled-control {
+  opacity: 0.62;
 }
 
 input[type="range"] {
