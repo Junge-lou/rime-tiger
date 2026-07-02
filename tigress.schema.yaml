@@ -22,6 +22,9 @@ schema:
     敲 ` 鍵進入拼音反查
   name: "虎码词库"
   schema_id: tigress
+  # 显式版本号，须高于小狼毫安装目录自带副本（0.9），否则部署时用户副本会被当作过时文件清进 trash/。
+  # version 写在 tiger_base 里没用：librime 的版本比较是纯文本读取，不解析 __include。
+  version: "1.0"
 
 translator:
   dictionary: tigress.extended
