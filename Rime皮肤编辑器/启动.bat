@@ -1,11 +1,18 @@
 @echo off
-cd /d "%~dp0.."
-where powershell >nul 2>nul
+chcp 65001 >nul
+set "EDITOR_DIR=%~dp0"
+for %%I in ("%EDITOR_DIR%..") do set "RIME_ROOT=%%~fI"
+set "SERVER=%EDITOR_DIR%local\local_server.ps1"
+where powershell.exe >nul 2>nul
 if not errorlevel 1 (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "Rime皮肤编辑器\local\local_server.ps1" -Root "%CD%"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SERVER%" -Root "%RIME_ROOT%"
   exit /b %errorlevel%
 )
-echo 未找到 PowerShell，无法启动本地服务。
-echo 请继续使用 Chrome/Edge 的“选择 Rime 配置文件夹”模式。
+where powershell >nul 2>nul
+if not errorlevel 1 (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%SERVER%" -Root "%RIME_ROOT%"
+  exit /b %errorlevel%
+)
+echo PowerShell was not found. Please open index.html and choose the Rime config folder in Chrome or Edge.
 pause
 exit /b 1

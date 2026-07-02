@@ -6,24 +6,43 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$BackupRoot = 'Rime皮肤编辑器备份'
+$Utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false
+$OutputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
+function U {
+  param([int[]]$CodePoints)
+  return [System.String]::Concat(@($CodePoints | ForEach-Object { [System.Char]::ConvertFromUtf32($_) }))
+}
+
+$BackupRoot = U @(0x76AE, 0x80A4, 0x7F16, 0x8F91, 0x5668, 0x5907, 0x4EFD)
+$AccessDeniedMessage = U @(0x4E0D, 0x5141, 0x8BB8, 0x8BBF, 0x95EE, 0x8FD9, 0x4E2A, 0x8DEF, 0x5F84, 0x3002)
+$PortUnavailableMessage = U @(0x65E0, 0x6CD5, 0x542F, 0x52A8, 0x672C, 0x5730, 0x670D, 0x52A1, 0xFF1A, 0x0031, 0x0037, 0x0038, 0x0039, 0x0030, 0x002D, 0x0031, 0x0037, 0x0039, 0x0032, 0x0030, 0x0020, 0x7AEF, 0x53E3, 0x90FD, 0x4E0D, 0x53EF, 0x7528, 0x3002)
+$StartedMessage = U @(0x0052, 0x0069, 0x006D, 0x0065, 0x0020, 0x76AE, 0x80A4, 0x7F16, 0x8F91, 0x5668, 0x5DF2, 0x542F, 0x52A8, 0xFF1A)
+$RootMessage = U @(0x914D, 0x7F6E, 0x76EE, 0x5F55, 0xFF1A)
+$CloseMessage = U @(0x5173, 0x95ED, 0x8FD9, 0x4E2A, 0x7A97, 0x53E3, 0x5373, 0x53EF, 0x505C, 0x6B62, 0x672C, 0x5730, 0x670D, 0x52A1, 0x3002)
+$InvalidTokenMessage = U @(0x8BBF, 0x95EE, 0x4EE4, 0x724C, 0x65E0, 0x6548, 0x3002)
+$MissingFileMessage = U @(0x6587, 0x4EF6, 0x4E0D, 0x5B58, 0x5728, 0x3002)
+$MissingApiMessage = U @(0x63A5, 0x53E3, 0x4E0D, 0x5B58, 0x5728, 0x3002)
 $StaticRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $TokenBytes = New-Object byte[] 18
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($TokenBytes)
+$TokenRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$TokenRng.GetBytes($TokenBytes)
+$TokenRng.Dispose()
 $Token = -join ($TokenBytes | ForEach-Object { $_.ToString('x2') })
 
 function Resolve-AllowedPath {
   param([string]$RequestedPath)
   if ([string]::IsNullOrWhiteSpace($RequestedPath) -or $RequestedPath.StartsWith('/') -or $RequestedPath.StartsWith('\') -or $RequestedPath.Contains([char]0)) {
-    throw '不允许访问这个路径。'
+    throw $AccessDeniedMessage
   }
   $Parts = @($RequestedPath -replace '\\','/' -split '/' | Where-Object { $_ })
-  if ($Parts -contains '..') { throw '不允许访问这个路径。' }
+  if ($Parts -contains '..') { throw $AccessDeniedMessage }
   $IsFrontendFile = $Parts.Count -eq 1 -and @('squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml') -contains $Parts[0]
   $IsCustomFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.custom.yaml')
   $IsSchemaFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.schema.yaml')
   $IsBackupFile = $Parts.Count -ge 2 -and $Parts[0] -eq $BackupRoot
-  if (-not ($IsFrontendFile -or $IsCustomFile -or $IsSchemaFile -or $IsBackupFile)) { throw '不允许访问这个路径。' }
+  if (-not ($IsFrontendFile -or $IsCustomFile -or $IsSchemaFile -or $IsBackupFile)) { throw $AccessDeniedMessage }
   $TargetPath = $Root
   foreach ($Part in $Parts) {
     $TargetPath = Join-Path $TargetPath $Part
@@ -31,7 +50,7 @@ function Resolve-AllowedPath {
   $Target = [System.IO.Path]::GetFullPath($TargetPath)
   $RootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
   if ($Target -ne $RootFull -and -not $Target.StartsWith($RootFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw '不允许访问这个路径。'
+    throw $AccessDeniedMessage
   }
   return $Target
 }
@@ -120,7 +139,7 @@ function Get-Backups {
 function Remove-Backup {
   param([string]$Name)
   if ([string]::IsNullOrWhiteSpace($Name) -or $Name -eq '.' -or $Name -eq '..' -or $Name.Contains('/') -or $Name.Contains('\') -or $Name.Contains([char]0)) {
-    throw '不允许访问这个路径。'
+    throw $AccessDeniedMessage
   }
   $Marker = Resolve-AllowedPath "$BackupRoot/$Name/manifest.json"
   $BackupDir = Split-Path $Marker -Parent
@@ -155,13 +174,13 @@ foreach ($CandidatePort in $PortsToTry) {
   }
 }
 if (-not $Listener) {
-  throw '无法启动本地服务：17890-17920 端口都不可用。'
+  throw $PortUnavailableMessage
 }
 $Url = "http://localhost:$ActualPort/?token=$Token"
 $LastSeen = Get-Date
-Write-Host "Rime 皮肤编辑器已启动：$Url"
-Write-Host "配置目录：$Root"
-Write-Host "关闭这个窗口即可停止本地服务。"
+Write-Host "$StartedMessage$Url"
+Write-Host "$RootMessage$Root"
+Write-Host $CloseMessage
 Start-Process $Url
 
 while ($Listener.IsListening) {
@@ -185,7 +204,7 @@ while ($Listener.IsListening) {
         $QueryToken = $Token
       }
       if ($QueryToken -ne $Token) {
-        Send-Json $Response 403 @{ error = '访问令牌无效。' }
+        Send-Json $Response 403 @{ error = $InvalidTokenMessage }
         continue
       }
       $LastSeen = Get-Date
@@ -214,7 +233,7 @@ while ($Listener.IsListening) {
       if ($Request.HttpMethod -eq 'GET' -and $Path -eq '/api/file') {
         $FilePath = Resolve-AllowedPath (Get-QueryValue $Request 'path')
         if (-not (Test-Path $FilePath -PathType Leaf)) {
-          Send-Json $Response 404 @{ error = '文件不存在。' }
+          Send-Json $Response 404 @{ error = $MissingFileMessage }
           continue
         }
         Send-Json $Response 200 @{ exists = $true; text = Get-Content $FilePath -Raw -Encoding UTF8 }
@@ -241,7 +260,7 @@ while ($Listener.IsListening) {
         Send-Json $Response 200 @{ ok = $true }
         continue
       }
-      Send-Json $Response 404 @{ error = '接口不存在。' }
+      Send-Json $Response 404 @{ error = $MissingApiMessage }
       continue
     }
 
