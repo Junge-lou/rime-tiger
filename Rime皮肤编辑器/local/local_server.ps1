@@ -132,8 +132,8 @@ function Write-JsonValue {
   Write-JsonString $Sb ([string]$Value)
 }
 
-# PowerShell 5.1 的 ConvertTo-Json 在 -Depth 较大且内容含非 ASCII（中文）时会逐字符递归，
-# 导致序列化耗时与体积指数爆炸（/api/config 永不返回）。改用手写序列化器彻底规避。
+# PowerShell 5.1 ConvertTo-Json recursively walks strings when -Depth is high,
+# making serialization time and output explode. Use a small serializer instead.
 function ConvertTo-JsonSafe {
   param($Value)
   $Sb = New-Object System.Text.StringBuilder
