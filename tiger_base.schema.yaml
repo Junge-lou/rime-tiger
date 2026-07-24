@@ -79,6 +79,7 @@ engine:
     - lua_processor@*input_speed_stat*processor #测速统计开关
     - lua_processor@*djs_countdown*processor #倒计时管理
     - lua_processor@*mars*processor #火星文命令开关
+    - lua_processor@*tiger_user_words*processor #用户加词、减词、调序
     - lua_processor@*space_proc3 #标顶空码不上屏
     - lua_processor@*symbol_proc #候选唯一时符号顶字
     - key_binder
@@ -111,6 +112,7 @@ engine:
 
 
   filters:
+    - lua_filter@*tiger_user_words*filter #用户加词、减词、调序
     - lua_filter@*core2022_filter #常用字/全字集过滤；放在简繁前
     # - charset_filter@utf8
     # - charset_filter@gbk
