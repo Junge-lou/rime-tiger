@@ -31,6 +31,12 @@ local PROFILES = {
             "tiger.common.dict.yaml",
             "tiger.dict.yaml",
         },
+        text_code_weight_dicts = {
+            "tiger.user.dict.yaml",
+            "tiger.extended.dict.yaml",
+            "tiger.common.dict.yaml",
+            "tiger.dict.yaml",
+        },
         weight_base = 100000000000,
         weight_step = 1000,
     },
@@ -50,6 +56,10 @@ local PROFILES = {
             "tigress.dict.yaml",
             "tigress_ci.dict.yaml",
             "tigress_simp_ci.dict.yaml",
+        },
+        text_code_weight_dicts = {
+            "tigress.user.dict.yaml",
+            "tigress.extended.dict.yaml",
         },
         weight_base = 100000000000,
         weight_step = 1000,
@@ -168,24 +178,35 @@ local function is_user_layer_dict(profile, filename)
     return false
 end
 
+local function uses_text_code_weight(profile, filename)
+    for _, configured in ipairs(profile.text_code_weight_dicts) do
+        if filename == configured then
+            return true
+        end
+    end
+    return false
+end
+
 local function parse_entry(profile, filename, line)
     if line:match("^%s*$") or line:match("^%s*#") then
         return nil
     end
     local fields = split_tab(line)
-    if is_user_layer_dict(profile, filename) then
-        local text, code, weight = fields[1], fields[2], tonumber(fields[3])
-        if text and code and text ~= "" and code ~= "" then
-            return { text = text, code = code, weight = weight }
-        end
-        if text and text ~= "" and not code then
-            return { text = text, code = nil, weight = nil }
-        end
+    local text = fields[1]
+    local code
+    local weight
+    if uses_text_code_weight(profile, filename) then
+        code = fields[2]
+        weight = tonumber(fields[3])
     else
-        local text, weight, code = fields[1], tonumber(fields[2]), fields[3]
-        if text and code and text ~= "" and code ~= "" then
-            return { text = text, code = code, weight = weight }
-        end
+        weight = tonumber(fields[2])
+        code = fields[3]
+    end
+    if text and code and text ~= "" and code ~= "" then
+        return { text = text, code = code, weight = weight }
+    end
+    if is_user_layer_dict(profile, filename) and text and text ~= "" and not code then
+        return { text = text, code = nil, weight = nil }
     end
     return nil
 end

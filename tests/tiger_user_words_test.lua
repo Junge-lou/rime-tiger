@@ -30,6 +30,22 @@ log = {
   end,
 }
 
+local function write_file(path, text)
+  local file = assert(io.open(path, "w"))
+  file:write(text)
+  file:close()
+end
+
+local function read_file(path)
+  local file = assert(io.open(path, "r"))
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
+write_file(temp_dir .. "/tiger.dict.yaml", "TigerSource\ttsrc\t100\n")
+write_file(temp_dir .. "/tigress.dict.yaml", "TigressSource\t100\tqwer\n")
+
 local function notifier()
   return {
     connect = function(_, _)
@@ -185,18 +201,32 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   assert(words.processor.func(plain_key(0x5c), command_env) == 2)
   assert(command_env.engine.context.input == "\\djs")
 
-  local add_env = new_runtime_env(schema_id, "efgh", { "加词候选" })
+  local added_text = schema_id == "tiger" and "TigerAdded" or "TigressAdded"
+  local add_env = new_runtime_env(schema_id, "efgh", { added_text })
   words.processor.init(add_env)
   assert(words.processor.func(ctrl_key(0x3b), add_env) == 1)
   assert(add_env.capture.code == "efgh")
   assert(add_env.capture.operation == "add")
+  assert(words.processor.func(plain_key(0x61), add_env) == 1)
+  assert(words.processor.func(plain_key(0x20), add_env) == 1)
+  assert(add_env.capture.text == added_text)
+  assert(words.processor.func(plain_key(0xff0d), add_env) == 1)
+  assert(add_env.capture == nil)
+  local user_dict = read_file(temp_dir .. "/" .. schema_id .. ".user.dict.yaml")
+  assert(user_dict:find(added_text .. "\tefgh\t", 1, true))
 
-  local disable_env = new_runtime_env(schema_id, "ijkl", { "减词候选" })
+  local disable_code = schema_id == "tiger" and "tsrc" or "qwer"
+  local disable_text = schema_id == "tiger" and "TigerSource" or "TigressSource"
+  local disable_env = new_runtime_env(schema_id, disable_code, { disable_text })
   words.processor.init(disable_env)
   assert(words.processor.func(ctrl_key(0x27), disable_env) == 1)
-  assert(disable_env.capture.code == "ijkl")
-  assert(disable_env.capture.text == "减词候选")
+  assert(disable_env.capture.code == disable_code)
+  assert(disable_env.capture.text == disable_text)
   assert(disable_env.capture.operation == "disable")
+  assert(words.processor.func(plain_key(0xff0d), disable_env) == 1)
+  assert(disable_env.state.blocked[disable_code][disable_text])
+  local source_dict = read_file(temp_dir .. "/" .. schema_id .. ".dict.yaml")
+  assert(source_dict:find("# " .. disable_text, 1, true))
 
   local reorder_env = new_runtime_env(schema_id, "mnop", { "第一", "第二" }, 1)
   words.processor.init(reorder_env)
@@ -217,8 +247,17 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   assert(yielded[1].comment == "空格进入加词")
 end
 
+local tiger_user = read_file(temp_dir .. "/tiger.user.dict.yaml")
+local tigress_user = read_file(temp_dir .. "/tigress.user.dict.yaml")
+assert(tiger_user:find("TigerAdded", 1, true))
+assert(not tiger_user:find("TigressAdded", 1, true))
+assert(tigress_user:find("TigressAdded", 1, true))
+assert(not tigress_user:find("TigerAdded", 1, true))
+
 assert(os.remove(temp_dir .. "/tiger.user.dict.yaml"))
 assert(os.remove(temp_dir .. "/tigress.user.dict.yaml"))
+assert(os.remove(temp_dir .. "/tiger.dict.yaml"))
+assert(os.remove(temp_dir .. "/tigress.dict.yaml"))
 assert(os.remove(temp_dir))
 
 print("tiger_user_words tests passed")
