@@ -9,6 +9,7 @@ Rime皮肤编辑器/tests/
 docs/
 tools/
 .superpowers/
+.worktrees/
 *.pid
 server-stopped
 Rime皮肤编辑器/local/local_server.mjs
