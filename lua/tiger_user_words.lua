@@ -9,6 +9,8 @@
 --   Ctrl+Option+arrows is the macOS-friendly alternative
 --   Ctrl+Home/End or Ctrl+Option+Home/End move current candidate to page edge
 
+local add_trigger = require("tiger_add_trigger")
+
 local kRejected = 0
 local kAccepted = 1
 local kNoop = 2
@@ -67,6 +69,7 @@ local KEY = {
     DOWN = 0xff54,
     END = 0xff57,
     SPACE = 0x20,
+    BACKSLASH = 0x5c,
     APOSTROPHE = 0x27,
     PLUS = 0x2b,
     MINUS = 0x2d,
@@ -530,7 +533,7 @@ local function genuine_text(cand)
 end
 
 local function is_status_candidate(cand)
-    return cand and cand.type == "tigress_user_status"
+    return cand and cand.type == "tiger_user_status"
 end
 
 local function selected_candidate(env)
@@ -602,8 +605,8 @@ local function clear_capture(env)
     sync_capture_state(env)
 end
 
-local function enter_capture(env, operation, default_text)
-    local code = current_code(env)
+local function enter_capture(env, operation, default_text, target_code)
+    local code = target_code or current_code(env)
     if code == "" then
         return false
     end
@@ -901,6 +904,19 @@ function processor.func(key_event, env)
         return kNoop
     end
 
+    if not key_event:ctrl() and not key_event:alt() and not key_event:shift() and not key_event:release() then
+        local ctx = env.engine.context
+        if keycode == KEY.BACKSLASH and add_trigger.can_append(ctx.input) then
+            ctx:push_input("\\")
+            return kAccepted
+        elseif keycode == KEY.SPACE then
+            local code = add_trigger.target_code(ctx.input)
+            if code then
+                return enter_capture(env, "add", nil, code) and kAccepted or kNoop
+            end
+        end
+    end
+
     if is_ctrl_shortcut(key_event) then
         if keycode == KEY.SEMICOLON then
             return enter_capture(env, "add") and kAccepted or kNoop
@@ -927,7 +943,14 @@ local function capture_status_candidate(env, capture)
     local seg = current_segment(env)
     local start = seg and seg._start or 0
     local finish = seg and seg._end or start
-    return Candidate("tigress_user_status", start, finish, capture_status_text(capture), capture_status_comment())
+    return Candidate("tiger_user_status", start, finish, capture_status_text(capture), capture_status_comment())
+end
+
+local function add_trigger_status_candidate(env, code)
+    local seg = current_segment(env)
+    local start = seg and seg._start or 0
+    local finish = seg and seg._end or #env.engine.context.input
+    return Candidate("tiger_user_status", start, finish, "加词 " .. code, "空格进入加词")
 end
 
 local function candidate_sort_key(state, code, text, fallback)
@@ -951,6 +974,12 @@ function filter.func(input, env)
         if not env.state.capture.query or env.state.capture.query == "" then
             return
         end
+    end
+
+    local trigger_code = add_trigger.target_code(env.engine.context.input)
+    if trigger_code then
+        yield(add_trigger_status_candidate(env, trigger_code))
+        return
     end
 
     local code = current_code(env)
@@ -1001,7 +1030,7 @@ function filter.func(input, env)
             local seg = current_segment(env)
             local start = seg and seg._start or 0
             local finish = seg and seg._end or #code
-            local cand = Candidate("tigress_user_word", start, finish, text, "")
+            local cand = Candidate("tiger_user_word", start, finish, text, "")
             cand.quality = weights[text] or state.config.weight_base
             table.insert(rows, {
                 cand = cand,
