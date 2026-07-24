@@ -81,9 +81,9 @@ engine:
     - recognizer  # 识别反查、符号、表达式等输入模式
     - lua_processor@*option_sync  # 跨窗口同步功能开关
     - lua_processor@*mars*processor  # 火星文命令开关
+    - lua_processor@*tiger_user_words*processor  # 两方案都支持 Ctrl+; 或 编码 + \\ + Space 加词
     - lua_processor@*space_proc3  # 空码处理
     - lua_processor@*symbol_proc  # 候选唯一时符号顶字
-    # - lua_processor@*tigress_user_words*processor  # 词库版加词、删词、调序；单字版不要加
     - key_binder  # 快捷键绑定
     - speller  # 编码处理
     - punctuator  # 标点处理
@@ -113,7 +113,7 @@ engine:
     - lua_translator@calculator_translator  # 简易计算器
     - lua_translator@shijian2_translator  # 时间
   filters:
-    # - lua_filter@*tigress_user_words*filter  # 词库版用户词过滤与调序；单字版不要加
+    - lua_filter@*tiger_user_words*filter  # tiger / tigress 用户词过滤与调序
     - lua_filter@*core2022_filter  # 常用字/全字集过滤，放在简繁前
     # - charset_filter@gb2312  # 字符集过滤示例
     # - charset_filter@gbk

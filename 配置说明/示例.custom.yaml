@@ -42,7 +42,9 @@ patch:
   # --------------------
   translator/enable_completion: false  # 编码提示；true 开启，false 关闭
   translator/enable_sentence: false  # 连打造句；形码一般关闭
-  translator/enable_user_dict: false  # Rime 用户词典开关
+  translator/enable_user_dict: false  # Rime 动态用户词典关闭；本配置由共享 Lua 管理独立用户词典
+  # tiger / tigress 都支持 Ctrl+; 或 编码 + \\ + Space 进入加词。
+  # 新增内容分开保存：tiger.user.dict.yaml / tigress.user.dict.yaml。
   translator/enable_encoder: false  # 自动造词编码
   translator/encode_commit_history: false  # 根据上屏历史造词
   speller/auto_select: true  # 允许自动上屏
