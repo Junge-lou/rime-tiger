@@ -248,6 +248,7 @@ function bindDom() {
     'fontFace',
     'labelFontFace',
     'commentFontFace',
+    'fontHint',
     'numberStyle',
     'numberSeparator',
     'candidateMarkerField',
@@ -965,6 +966,7 @@ function renderEditor() {
   syncSelect(dom.fontFace, layout.fontFace);
   syncSelect(dom.labelFontFace, layout.labelFontFace);
   syncSelect(dom.commentFontFace, layout.commentFontFace);
+  updateFontHint();
   syncSelect(dom.numberStyle, layout.numberStyle, numberStyleOptionLabel(layout));
   syncSelect(dom.numberSeparator, layout.numberSeparator, numberSeparatorOptionLabel(layout));
   syncSelect(dom.candidateMarker, layout.markText);
@@ -1871,6 +1873,50 @@ function populateFontOptions() {
   }
 }
 
+function fontFamiliesFromValue(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean);
+}
+
+function isFontAvailable(value) {
+  const families = fontFamiliesFromValue(value);
+  if (!families.length || value === '__custom_font__') return true;
+  if (typeof document.fonts?.check !== 'function') return true;
+  try {
+    return families.some((family) => document.fonts.check(`16px "${family}"`));
+  } catch {
+    return true;
+  }
+}
+
+function markMissingFontOptions(select) {
+  for (const option of select.options) {
+    if (option.value === '__custom_font__') continue;
+    if (!option.dataset.baseLabel) option.dataset.baseLabel = option.textContent;
+    option.textContent = isFontAvailable(option.value)
+      ? option.dataset.baseLabel
+      : `${option.dataset.baseLabel}（未安装）`;
+  }
+}
+
+function updateFontHint() {
+  if (!dom.fontHint) return;
+  const missing = [];
+  for (const select of [dom.fontFace, dom.labelFontFace, dom.commentFontFace]) {
+    markMissingFontOptions(select);
+    const value = select.value;
+    if (value && value !== '__custom_font__' && !isFontAvailable(value) && !missing.includes(value)) {
+      missing.push(value);
+    }
+  }
+  dom.fontHint.hidden = !missing.length;
+  if (missing.length) {
+    dom.fontHint.textContent = `「${missing.join('」「')}」这台电脑没有安装：预览会回退到系统默认字体，切换后看不到变化是正常现象，不是皮肤问题。安装字体后预览和输入法才会显示该字体。`;
+  }
+}
+
 function populateOneFontSelect(select) {
   select.replaceChildren();
   for (const font of COMMON_FONTS) {
@@ -1915,17 +1961,20 @@ function updateFontSelect(field, select) {
   if (!state.draftSkin) return;
   if (select.value !== '__custom_font__') {
     updateDraftLayout(field, select.value);
+    updateFontHint();
     return;
   }
   const current = state.draftSkin.layout?.[field] || state.draftSkin.layout?.fontFace || '';
   const value = window.prompt('输入字体名称，多个字体可用逗号分隔。', current);
   if (!value) {
     syncSelect(select, current);
+    updateFontHint();
     return;
   }
   const trimmed = value.trim();
   syncSelect(select, trimmed);
   updateDraftLayout(field, trimmed);
+  updateFontHint();
 }
 
 function parseCustomList(value) {

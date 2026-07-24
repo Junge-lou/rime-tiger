@@ -70,9 +70,80 @@ function Get-QueryValue {
   return ''
 }
 
+function Write-JsonString {
+  param([System.Text.StringBuilder]$Sb, [string]$S)
+  [void]$Sb.Append('"')
+  foreach ($ch in $S.ToCharArray()) {
+    $code = [int]$ch
+    switch ($ch) {
+      '"'  { [void]$Sb.Append('\"'); continue }
+      '\'  { [void]$Sb.Append('\\'); continue }
+      "`b" { [void]$Sb.Append('\b'); continue }
+      "`f" { [void]$Sb.Append('\f'); continue }
+      "`n" { [void]$Sb.Append('\n'); continue }
+      "`r" { [void]$Sb.Append('\r'); continue }
+      "`t" { [void]$Sb.Append('\t'); continue }
+      default {
+        if ($code -lt 32) { [void]$Sb.Append('\u{0:x4}' -f $code) }
+        else { [void]$Sb.Append($ch) }
+      }
+    }
+  }
+  [void]$Sb.Append('"')
+}
+
+function Write-JsonValue {
+  param([System.Text.StringBuilder]$Sb, $Value)
+  if ($null -eq $Value) { [void]$Sb.Append('null'); return }
+  if ($Value -is [string]) { Write-JsonString $Sb $Value; return }
+  if ($Value -is [bool]) { [void]$Sb.Append($(if ($Value) { 'true' } else { 'false' })); return }
+  if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
+    [void]$Sb.Append([string]$Value); return
+  }
+  if ($Value -is [System.Collections.IDictionary]) {
+    [void]$Sb.Append('{'); $First = $true
+    foreach ($Key in $Value.Keys) {
+      if (-not $First) { [void]$Sb.Append(',') }
+      $First = $false
+      Write-JsonString $Sb ([string]$Key); [void]$Sb.Append(':')
+      Write-JsonValue $Sb $Value[$Key]
+    }
+    [void]$Sb.Append('}'); return
+  }
+  if ($Value -is [System.Management.Automation.PSCustomObject]) {
+    [void]$Sb.Append('{'); $First = $true
+    foreach ($Prop in $Value.PSObject.Properties) {
+      if (-not $First) { [void]$Sb.Append(',') }
+      $First = $false
+      Write-JsonString $Sb $Prop.Name; [void]$Sb.Append(':')
+      Write-JsonValue $Sb $Prop.Value
+    }
+    [void]$Sb.Append('}'); return
+  }
+  if ($Value -is [System.Collections.IEnumerable]) {
+    [void]$Sb.Append('['); $First = $true
+    foreach ($Item in $Value) {
+      if (-not $First) { [void]$Sb.Append(',') }
+      $First = $false
+      Write-JsonValue $Sb $Item
+    }
+    [void]$Sb.Append(']'); return
+  }
+  Write-JsonString $Sb ([string]$Value)
+}
+
+# PowerShell 5.1 的 ConvertTo-Json 在 -Depth 较大且内容含非 ASCII（中文）时会逐字符递归，
+# 导致序列化耗时与体积指数爆炸（/api/config 永不返回）。改用手写序列化器彻底规避。
+function ConvertTo-JsonSafe {
+  param($Value)
+  $Sb = New-Object System.Text.StringBuilder
+  Write-JsonValue $Sb $Value
+  return $Sb.ToString()
+}
+
 function Send-Json {
   param($Response, [int]$Status, $Value)
-  $Json = ConvertTo-Json $Value -Depth 20 -Compress
+  $Json = ConvertTo-JsonSafe $Value
   $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Json)
   $Response.StatusCode = $Status
   $Response.ContentType = 'application/json; charset=utf-8'
