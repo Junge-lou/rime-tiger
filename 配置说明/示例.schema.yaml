@@ -81,7 +81,7 @@ engine:
     - recognizer  # 识别反查、符号、表达式等输入模式
     - lua_processor@*option_sync  # 跨窗口同步功能开关
     - lua_processor@*mars*processor  # 火星文命令开关
-    - lua_processor@*tiger_user_words*processor  # tiger / tigress 用户加词、减词、调序
+    - lua_processor@*tiger_user_words*processor  # 两方案都支持 Ctrl+; 或 编码 + \\ + Space 加词
     - lua_processor@*space_proc3  # 空码处理
     - lua_processor@*symbol_proc  # 候选唯一时符号顶字
     - key_binder  # 快捷键绑定

@@ -122,6 +122,27 @@ local function test_shared_user_word_management_order()
   assert_not_contains(example, "单字版不要加", "schema example does not restrict user words to Tigress")
 end
 
+local function test_user_word_management_documentation()
+  for _, path in ipairs({ "README.md", "配置说明/配置说明.txt" }) do
+    local text = read(path)
+    assert_contains(text, "tiger.user.dict.yaml", path .. " names the Tiger user dictionary")
+    assert_contains(text, "tigress.user.dict.yaml", path .. " names the Tigress user dictionary")
+    assert_contains(text, "Ctrl+;", path .. " documents the control shortcut")
+    assert_contains(text, "编码 + \\\\ + Space", path .. " documents the backslash fallback")
+    assert_not_contains(text, "不要把加词 Lua 加到 tiger", path .. " does not prohibit Tiger user words")
+    assert_not_contains(text, "该功能接入 `tigress`", path .. " does not describe the feature as Tigress-only")
+  end
+
+  local schema_example = read("配置说明/示例.schema.yaml")
+  local custom_example = read("配置说明/示例.custom.yaml")
+  for _, example in ipairs({ schema_example, custom_example }) do
+    assert_not_contains(example, "tigress_user_words", "examples use the shared component name")
+    assert_not_contains(example, "单字版不要加", "examples do not restrict user words to Tigress")
+  end
+  assert_contains(custom_example, "tiger.user.dict.yaml", "custom example names the Tiger user dictionary")
+  assert_contains(custom_example, "tigress.user.dict.yaml", "custom example names the Tigress user dictionary")
+end
+
 local tests = {
   test_default_schema_list_and_saved_option,
   test_full_internal_files_are_removed,
@@ -129,6 +150,7 @@ local tests = {
   test_extended_dictionaries_import_full_tables,
   test_base_schema_has_filter_switch_and_binding,
   test_shared_user_word_management_order,
+  test_user_word_management_documentation,
 }
 
 for _, test in ipairs(tests) do
