@@ -1,5 +1,5 @@
 name: tigress_simp_ci
-version: "2026.03.01"
+version: "2026.06.29"
 sort: by_weight
 use_preset_vocabulary: false
 columns:
@@ -1529,6 +1529,7 @@ encoder:
 安卓猫	117	wym
 与田铃	117	fqz
 斩杀线	117	ybi
+双性人	117	rhj
 地下水	117	gfk
 运动鞋	117	bbt
 适合于	117	ajf

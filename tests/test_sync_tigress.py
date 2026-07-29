@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
 import tempfile
 import unittest
@@ -237,6 +238,281 @@ class CommonFilterTest(unittest.TestCase):
 
         self.assertEqual(set(expected.by_pair), set(common.by_pair))
         self.assertEqual(len(excluded), 26)
+
+
+class RepositorySyncTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.repo = Path(self.temp_dir.name)
+        self._write_fixture_repository()
+
+    @staticmethod
+    def upstream_bytes(*rows: tuple[str, str]) -> bytes:
+        data = "\n".join(f"{code}\t{text}" for code, text in rows)
+        return f"KeyCode=abcdefghijklmnopqrstuvwxyz\n[Data]\n{data}\n".encode("utf-8")
+
+    @staticmethod
+    def dictionary(name: str, rows: tuple[tuple[str, ...], ...]) -> str:
+        data = "\n".join("\t".join(row) for row in rows)
+        return (
+            f"name: {name}\nversion: \"2026.01.01\"\nsort: by_weight\n"
+            "columns:\n  - text\n  - weight\n  - code\n  - stem\n...\n"
+            f"{data}\n"
+        )
+
+    def _write_fixture_repository(self) -> None:
+        files = {
+            "tigress.dict.yaml": self.dictionary(
+                "tigress", (("常", "100", "a", "stem"), ("𠀀", "0", "fgf"))
+            ),
+            "tigress.common.dict.yaml": self.dictionary(
+                "tigress.common", (("常", "100", "a", "stem"),)
+            ),
+            "tigress_ci.dict.yaml": self.dictionary(
+                "tigress_ci", (("旧词", "50", "abcd"), ("本地词", "40", "wxyz"))
+            ),
+            "tigress_ci.common.dict.yaml": self.dictionary(
+                "tigress_ci.common", (("旧词", "50", "abcd"), ("本地词", "40", "wxyz"))
+            ),
+            "tigress_simp_ci.dict.yaml": self.dictionary(
+                "tigress_simp_ci", (("简词", "80", "ab"),)
+            ),
+            "tigress_simp_ci.common.dict.yaml": self.dictionary(
+                "tigress_simp_ci.common", (("简词", "80", "ab"),)
+            ),
+            "core2022.dict.yaml": (
+                "name: core2022\nversion: \"1\"\n...\n"
+                "常\tt\n旧\tt\n词\tt\n简\tt\n本\tt\n地\tt\n"
+            ),
+        }
+        for relative, content in files.items():
+            path = self.repo / relative
+            path.write_text(content, encoding="utf-8")
+
+    def write_upstream(self, content: bytes, name: str = "new.txt") -> Path:
+        path = self.repo / name
+        path.write_bytes(content)
+        return path
+
+    def install_old_snapshot(self, content: bytes, revision: str = "b" * 40) -> None:
+        table = self.repo / "vendor/tiger-code/tables/tiger.txt"
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_bytes(content)
+        (self.repo / "vendor/tiger-code/REVISION").write_text(
+            revision + "\n", encoding="ascii"
+        )
+
+    @staticmethod
+    def limits(max_delta: float = 1.0):
+        return sync.SafetyLimits(
+            chars=1,
+            full_words=1,
+            short_words=1,
+            max_delta=max_delta,
+        )
+
+    def test_synchronizes_all_targets_and_is_idempotent(self) -> None:
+        old = self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        new = self.upstream_bytes(("a", "常"), ("newc", "新词"), ("bc", "新简"))
+        self.install_old_snapshot(old)
+        upstream = self.write_upstream(new)
+
+        result = sync.synchronize(
+            self.repo,
+            upstream,
+            revision="a" * 40,
+            version="2026.07.29",
+            limits=self.limits(),
+        )
+
+        self.assertTrue(result.changed)
+        self.assertEqual(
+            {path.as_posix() for path in result.changed_paths},
+            set(sync.MANAGED_PATHS),
+        )
+        full_words = sync.parse_rime(self.repo / "tigress_ci.dict.yaml")
+        self.assertNotIn(("旧词", "abcd"), full_words.by_pair)
+        self.assertIn(("新词", "newc"), full_words.by_pair)
+        self.assertIn(("本地词", "wxyz"), full_words.by_pair)
+        chars = sync.parse_rime(self.repo / "tigress.dict.yaml")
+        self.assertIn(("𠀀", "fgf"), chars.by_pair)
+        common_chars = sync.parse_rime(self.repo / "tigress.common.dict.yaml")
+        self.assertNotIn(("𠀀", "fgf"), common_chars.by_pair)
+        self.assertEqual(
+            (self.repo / "vendor/tiger-code/tables/tiger.txt").read_bytes(), new
+        )
+        self.assertEqual(
+            (self.repo / "vendor/tiger-code/REVISION").read_text(encoding="ascii"),
+            "a" * 40 + "\n",
+        )
+
+        second = sync.synchronize(
+            self.repo,
+            upstream,
+            revision="a" * 40,
+            version="2026.07.29",
+            limits=self.limits(),
+        )
+        self.assertFalse(second.changed)
+        self.assertEqual(second.changed_paths, ())
+
+    def test_bootstrap_adds_missing_official_rows_and_keeps_local_rows(self) -> None:
+        upstream = self.write_upstream(
+            self.upstream_bytes(("a", "常"), ("newc", "新词"), ("ab", "简词"))
+        )
+
+        sync.synchronize(
+            self.repo,
+            upstream,
+            revision="c" * 40,
+            version="2026.07.29",
+            limits=self.limits(),
+        )
+
+        words = sync.parse_rime(self.repo / "tigress_ci.dict.yaml")
+        self.assertIn(("新词", "newc"), words.by_pair)
+        self.assertIn(("旧词", "abcd"), words.by_pair)
+        self.assertIn(("本地词", "wxyz"), words.by_pair)
+
+    def test_ignores_new_revision_when_table_bytes_are_unchanged(self) -> None:
+        content = self.upstream_bytes(
+            ("a", "常"), ("abcd", "旧词"), ("ab", "简词")
+        )
+        self.install_old_snapshot(content, revision="b" * 40)
+        upstream = self.write_upstream(content)
+
+        result = sync.synchronize(
+            self.repo,
+            upstream,
+            revision="a" * 40,
+            version="2026.07.29",
+            limits=self.limits(),
+        )
+
+        self.assertFalse(result.changed)
+        self.assertEqual(
+            (self.repo / "vendor/tiger-code/REVISION").read_text(encoding="ascii"),
+            "b" * 40 + "\n",
+        )
+
+    def test_rejects_invalid_revision_without_writing(self) -> None:
+        upstream = self.write_upstream(
+            self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        )
+        before = (self.repo / "tigress.dict.yaml").read_bytes()
+
+        with self.assertRaisesRegex(sync.SyncError, "revision"):
+            sync.synchronize(
+                self.repo,
+                upstream,
+                revision="not-a-sha",
+                version="2026.07.29",
+                limits=self.limits(),
+            )
+
+        self.assertEqual((self.repo / "tigress.dict.yaml").read_bytes(), before)
+        self.assertFalse((self.repo / "vendor").exists())
+
+    def test_rejects_minimum_count_and_large_delta(self) -> None:
+        tiny = self.write_upstream(self.upstream_bytes(("a", "常")))
+        with self.assertRaisesRegex(sync.SyncError, "minimum"):
+            sync.synchronize(
+                self.repo,
+                tiny,
+                revision="d" * 40,
+                version="2026.07.29",
+                limits=self.limits(),
+            )
+
+        old = self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        self.install_old_snapshot(old)
+        grown = self.write_upstream(
+            self.upstream_bytes(
+                ("a", "常"),
+                ("abcd", "旧词"),
+                ("efgh", "新词"),
+                ("ab", "简词"),
+            ),
+            "grown.txt",
+        )
+        before = (self.repo / "vendor/tiger-code/tables/tiger.txt").read_bytes()
+        with self.assertRaisesRegex(sync.SyncError, "20%"):
+            sync.synchronize(
+                self.repo,
+                grown,
+                revision="e" * 40,
+                version="2026.07.29",
+                limits=self.limits(max_delta=0.20),
+            )
+        self.assertEqual(
+            (self.repo / "vendor/tiger-code/tables/tiger.txt").read_bytes(), before
+        )
+
+    def test_rejects_invalid_target_before_any_write(self) -> None:
+        upstream = self.write_upstream(
+            self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        )
+        original = (self.repo / "tigress.dict.yaml").read_bytes()
+        (self.repo / "tigress_ci.common.dict.yaml").write_text(
+            "not a dictionary\n", encoding="utf-8"
+        )
+
+        with self.assertRaises(sync.SyncError):
+            sync.synchronize(
+                self.repo,
+                upstream,
+                revision="f" * 40,
+                version="2026.07.29",
+                limits=self.limits(),
+            )
+
+        self.assertEqual((self.repo / "tigress.dict.yaml").read_bytes(), original)
+        self.assertFalse((self.repo / "vendor").exists())
+
+
+class RepositoryIntegrationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.repo = Path(self.temp_dir.name)
+        for relative in (
+            "core2022.dict.yaml",
+            *sync.MANAGED_PATHS,
+        ):
+            source = ROOT / relative
+            target = self.repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+    def test_real_snapshot_is_complete_and_idempotent(self) -> None:
+        snapshot = self.repo / sync.SNAPSHOT_PATH
+        revision = (self.repo / sync.REVISION_PATH).read_text(encoding="ascii").strip()
+        upstream = sync.parse_upstream(snapshot)
+
+        result = sync.synchronize(
+            self.repo,
+            snapshot,
+            revision=revision,
+            version="2026.06.29",
+        )
+
+        self.assertFalse(result.changed)
+        targets = {
+            kind: sync.parse_rime(self.repo / relative)
+            for kind, (relative, _) in sync.FULL_TARGETS.items()
+        }
+        for kind, document in targets.items():
+            official_pairs = {
+                entry.pair for entry in upstream.entries if entry.kind == kind
+            }
+            self.assertTrue(official_pairs <= set(document.by_pair), kind)
+
+        official_chars = {
+            entry.pair for entry in upstream.entries if entry.kind == "char"
+        }
+        local_only_chars = set(targets["char"].by_pair) - official_chars
+        self.assertGreater(len(local_only_chars), 70_000)
 
 
 if __name__ == "__main__":

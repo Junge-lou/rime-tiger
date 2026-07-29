@@ -1,5 +1,5 @@
 name: tigress_ci
-version: "2026.03.01"
+version: "2026.06.29"
 sort: by_weight
 use_preset_vocabulary: false
 columns:
@@ -28657,6 +28657,27 @@ encoder:
 李在明	450	enov
 万岁山	450	fvvs
 南北绿豆	450	naiz
+船艄	450	ioiy
+去冰	450	gkwk
+手拿把掐	450	ujuu
+顺顺利利	450	ooxx
+信息茧房	450	jolm
+茧房	450	lcml
+稀碎	450	xbmz
+星星之火，可以燎原	450	oorx
+计算机科学与技术	450	sree
+牝鸡司晨	450	qrao
+红毡	450	iuvy
+钗头	450	zrwm
+金钗	450	zjzr
+肏死	450	jmgv
+操死	450	udgv
+窄桥	450	ewet
+黄缘	450	nhib
+浮水	450	kyks
+拒食	450	unqs
+食雪	450	qstb
+双性人	450	rhjr
 女鬼	449	bnag
 共生	449	lhls
 阶下	448	tjfy
@@ -59247,6 +59268,7 @@ encoder:
 发现了	269	snrl
 找到了	269	uyrl
 朝日莉绪	269	noli
+张雪峰	269	btvh
 客观规律	268	wrhw
 大中型	268	mdfl
 党代会	268	sjjb

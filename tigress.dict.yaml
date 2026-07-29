@@ -1,5 +1,5 @@
 name: tigress
-version: "2026.03.01"
+version: "2026.06.29"
 sort: by_weight
 columns:
   - text
@@ -18,7 +18,6 @@ import_tables:
   - tigress_ci
   - tigress_simp_ci
 ...
-
 的	10359470	u	un
 的	256	uni
 的	256	unid
