@@ -640,10 +640,10 @@ class WorkflowTest(unittest.TestCase):
         workflow = self.path.read_text(encoding="utf-8")
 
         self.assertIn(
-            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", workflow
+            "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", workflow
         )
         self.assertIn(
-            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
             workflow,
         )
 
