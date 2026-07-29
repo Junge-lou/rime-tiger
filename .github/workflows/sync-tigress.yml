@@ -1,0 +1,115 @@
+name: Sync official Tigress dictionaries
+
+on:
+  schedule:
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-official-tigress
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch official table
+        shell: bash
+        run: |
+          upstream_dir=$(mktemp -d)
+          git clone --depth 1 https://github.com/lvyww/tiger-code.git "$upstream_dir"
+          upstream_revision=$(git -C "$upstream_dir" rev-parse HEAD)
+          upstream_version=$(git -C "$upstream_dir" show -s --format=%cs HEAD | tr '-' '.')
+          echo "upstream_dir=$upstream_dir" >> "$GITHUB_ENV"
+          echo "upstream_revision=$upstream_revision" >> "$GITHUB_ENV"
+          echo "upstream_version=$upstream_version" >> "$GITHUB_ENV"
+
+      - name: Synchronize Tigress dictionaries
+        shell: bash
+        run: |
+          python3 scripts/sync_tigress.py \
+            --repo-root . \
+            --upstream-table "$upstream_dir/tables/tiger.txt" \
+            --revision "$upstream_revision" \
+            --version "$upstream_version"
+
+      - name: Install Lua
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.4
+
+      - name: Run Python tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Run Lua tests
+        shell: bash
+        run: |
+          for test_file in tests/*_test.lua; do
+            lua "$test_file"
+          done
+
+      - name: Run Node tests
+        shell: bash
+        run: |
+          for test_file in tests/*_test.js; do
+            node "$test_file"
+          done
+
+      - name: Validate generated paths
+        shell: bash
+        run: |
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              tigress.dict.yaml|\
+              tigress.common.dict.yaml|\
+              tigress_ci.dict.yaml|\
+              tigress_ci.common.dict.yaml|\
+              tigress_simp_ci.dict.yaml|\
+              tigress_simp_ci.common.dict.yaml|\
+              vendor/tiger-code/tables/tiger.txt|\
+              vendor/tiger-code/REVISION)
+                ;;
+              *)
+                echo "::error::unexpected generated path: $changed_path"
+                exit 1
+                ;;
+            esac
+          done < <(git status --porcelain=v1 --untracked-files=all | cut -c4-)
+
+      - name: Commit and push update
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Official table is already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            tigress.dict.yaml \
+            tigress.common.dict.yaml \
+            tigress_ci.dict.yaml \
+            tigress_ci.common.dict.yaml \
+            tigress_simp_ci.dict.yaml \
+            tigress_simp_ci.common.dict.yaml \
+            vendor/tiger-code/tables/tiger.txt \
+            vendor/tiger-code/REVISION
+          git commit -m "chore: sync tigress dictionaries from tiger-code ${upstream_revision:0:12}"
+          git push origin HEAD:main

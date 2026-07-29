@@ -522,5 +522,65 @@ class SnapshotAttributesTest(unittest.TestCase):
         self.assertIn("vendor/tiger-code/tables/tiger.txt binary", attributes)
 
 
+class WorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.path = ROOT / ".github/workflows/sync-tigress.yml"
+
+    def test_schedule_manual_trigger_and_write_permissions(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        self.assertIn("cron: '0 22 * * *'", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("contents: write", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertNotRegex(workflow, r"(?m)^  push:")
+
+    def test_fetches_pinned_upstream_and_runs_sync(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        self.assertIn("https://github.com/lvyww/tiger-code.git", workflow)
+        self.assertIn("upstream_revision=$(git -C", workflow)
+        self.assertIn("upstream_version=$(git -C", workflow)
+        self.assertIn("python3 scripts/sync_tigress.py", workflow)
+
+    def test_runs_all_repository_test_types(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        self.assertIn("python3 -m unittest discover", workflow)
+        self.assertIn('tests/*_test.lua', workflow)
+        self.assertIn('lua "$test_file"', workflow)
+        self.assertIn('tests/*_test.js', workflow)
+        self.assertIn('node "$test_file"', workflow)
+
+    def test_allows_only_managed_runtime_paths(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        for relative in sync.MANAGED_PATHS:
+            self.assertIn(relative, workflow)
+        self.assertIn("unexpected generated path", workflow)
+
+    def test_commits_only_after_tests_and_pushes_main(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        test_position = workflow.index("python3 -m unittest discover")
+        commit_position = workflow.index("git commit")
+        self.assertLess(test_position, commit_position)
+        self.assertIn("github-actions[bot]", workflow)
+        self.assertIn("git push origin HEAD:main", workflow)
+
+    def test_readme_documents_sync_operation(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "官方码表自动同步",
+            "lvyww/tiger-code",
+            "每天北京时间 06:00",
+            "tigress",
+            "全字集",
+            "main",
+        ):
+            self.assertIn(expected, readme)
+
+
 if __name__ == "__main__":
     unittest.main()
