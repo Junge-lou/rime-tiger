@@ -519,7 +519,7 @@ class SnapshotAttributesTest(unittest.TestCase):
     def test_upstream_snapshot_disables_git_line_ending_conversion(self) -> None:
         attributes = (ROOT / ".gitattributes").read_text(encoding="ascii")
 
-        self.assertIn("vendor/tiger-code/tables/tiger.txt -text", attributes)
+        self.assertIn("vendor/tiger-code/tables/tiger.txt binary", attributes)
 
 
 if __name__ == "__main__":
