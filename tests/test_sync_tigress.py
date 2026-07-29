@@ -515,5 +515,12 @@ class RepositoryIntegrationTest(unittest.TestCase):
         self.assertGreater(len(local_only_chars), 70_000)
 
 
+class SnapshotAttributesTest(unittest.TestCase):
+    def test_upstream_snapshot_disables_git_line_ending_conversion(self) -> None:
+        attributes = (ROOT / ".gitattributes").read_text(encoding="ascii")
+
+        self.assertIn("vendor/tiger-code/tables/tiger.txt -text", attributes)
+
+
 if __name__ == "__main__":
     unittest.main()
