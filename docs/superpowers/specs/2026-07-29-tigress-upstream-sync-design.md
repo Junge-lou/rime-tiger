@@ -77,9 +77,10 @@ common-dictionary derivation, and deterministic file output. It accepts an
 upstream checkout or table path and revision explicitly so tests do not need
 network access.
 
-The script parses complete files before writing. It writes results through
-temporary files followed by atomic replacement so a parsing or validation
-failure cannot leave partially updated dictionaries.
+The script parses and validates complete files before writing. Each changed
+file is written through a temporary file followed by atomic replacement. The
+replacements are not a cross-file transaction if the filesystem fails during
+the write phase.
 
 ### Upstream snapshot
 
@@ -166,10 +167,14 @@ Before writing, the script requires:
 - valid UTF-8 input with exactly one `[Data]` marker;
 - two tab-separated fields in every upstream data row;
 - valid, unique codes and non-empty text;
+- no comment-shaped text, text over 128 Unicode code points, or source file
+  over 8 MiB;
 - conservative minimum counts for characters, full-code words, and short-code
   words;
 - no source category increasing or decreasing by more than 20 percent from
-  the tracked snapshot.
+  the tracked snapshot;
+- no source category adding or removing more than 20 percent of its tracked
+  pairs, even when its total count is unchanged.
 
 After generation it verifies:
 
@@ -178,6 +183,7 @@ After generation it verifies:
 - every previous local-only pair is retained;
 - all target pairs are unique;
 - common dictionaries exactly match the core filtering rules;
+- serialized dictionaries parse back to the exact expected row sequence;
 - a second identical run produces no file changes.
 
 The workflow additionally rejects any changed path outside the six managed
@@ -196,7 +202,7 @@ Python unit tests use small temporary fixtures and cover:
 - inferred weights for new entries;
 - exact common-character and common-phrase filtering;
 - source size guardrails;
-- atomic, deterministic, idempotent output.
+- per-file atomic, deterministic, idempotent output.
 
 An integration test runs the synchronizer against the tracked real upstream
 snapshot and copies of the repository dictionaries. Repository verification

@@ -4,7 +4,7 @@
 
 **Goal:** Monitor `lvyww/tiger-code` daily and merge verified official table changes into only the `tigress` dictionaries while preserving repository-specific full-Unicode entries.
 
-**Architecture:** A Python standard-library synchronizer parses the Fcitx5 source and Rime dictionaries, performs a snapshot-backed three-way merge, derives common dictionaries from `core2022`, and atomically writes deterministic output. A scheduled GitHub Actions workflow fetches an immutable upstream revision, verifies the result, and pushes a bot commit directly to `main`.
+**Architecture:** A Python standard-library synchronizer parses the Fcitx5 source and Rime dictionaries, performs a snapshot-backed three-way merge, derives common dictionaries from `core2022`, and writes deterministic output with per-file atomic replacement after validation. A scheduled GitHub Actions workflow fetches an immutable upstream revision, verifies the result, and pushes a bot commit directly to `main`.
 
 **Tech Stack:** Python 3.12 standard library and `unittest`, Rime YAML-style dictionaries, GitHub Actions, existing Lua and Node test scripts.
 

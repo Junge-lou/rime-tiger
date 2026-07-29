@@ -121,6 +121,9 @@ class SafetyLimits:
     full_words: int = 100_000
     short_words: int = 2_000
     max_delta: float = 0.20
+    max_pair_churn: float = 0.20
+    max_source_bytes: int = 8 * 1024 * 1024
+    max_text_length: int = 128
 
     def minimum_for(self, kind: EntryKind) -> int:
         return {
@@ -145,7 +148,15 @@ def classify(text: str, code: str) -> EntryKind:
     return "short_word"
 
 
-def parse_upstream(path: Path) -> UpstreamTable:
+def parse_upstream(
+    path: Path, *, limits: SafetyLimits = SafetyLimits()
+) -> UpstreamTable:
+    source_size = path.stat().st_size
+    if source_size > limits.max_source_bytes:
+        raise SyncError(
+            f"{path}: source exceeds byte limit "
+            f"({source_size} > {limits.max_source_bytes})"
+        )
     raw = path.read_bytes()
     try:
         content = raw.decode("utf-8")
@@ -169,6 +180,13 @@ def parse_upstream(path: Path) -> UpstreamTable:
         code, text = fields
         if not text:
             raise SyncError(f"{path}:{line_number}: text must not be empty")
+        if text.startswith("#"):
+            raise SyncError(f"{path}:{line_number}: text must not start with #")
+        if len(text) > limits.max_text_length:
+            raise SyncError(
+                f"{path}:{line_number}: text length exceeds safety limit "
+                f"({len(text)} > {limits.max_text_length})"
+            )
         if re.fullmatch(r"[a-z]{1,4}", code) is None:
             raise SyncError(f"{path}:{line_number}: invalid code {code!r}")
         pair = (text, code)
@@ -180,16 +198,16 @@ def parse_upstream(path: Path) -> UpstreamTable:
     return UpstreamTable(raw=raw, entries=tuple(entries))
 
 
-def parse_rime(path: Path) -> RimeDocument:
+def parse_rime_bytes(raw: bytes, source: str | Path) -> RimeDocument:
     try:
-        content = path.read_text(encoding="utf-8")
+        content = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise SyncError(f"{path}: dictionary is not valid UTF-8") from error
+        raise SyncError(f"{source}: dictionary is not valid UTF-8") from error
 
     lines = content.splitlines()
     markers = [index for index, line in enumerate(lines) if line == "..."]
     if len(markers) != 1:
-        raise SyncError(f"{path}: expected exactly one ... marker")
+        raise SyncError(f"{source}: expected exactly one ... marker")
     marker = markers[0]
     header = tuple(lines[: marker + 1])
     rows: list[RimeRow] = []
@@ -201,21 +219,27 @@ def parse_rime(path: Path) -> RimeDocument:
             continue
         fields = line.split("\t")
         if len(fields) not in (3, 4):
-            raise SyncError(f"{path}:{line_number}: expected three or four columns")
+            raise SyncError(f"{source}:{line_number}: expected three or four columns")
         text, weight_text, code = fields[:3]
         if not text or not code:
-            raise SyncError(f"{path}:{line_number}: text and code must not be empty")
+            raise SyncError(f"{source}:{line_number}: text and code must not be empty")
         try:
             weight = int(weight_text)
         except ValueError as error:
-            raise SyncError(f"{path}:{line_number}: invalid weight {weight_text!r}") from error
+            raise SyncError(
+                f"{source}:{line_number}: invalid weight {weight_text!r}"
+            ) from error
         stem = fields[3] if len(fields) == 4 else None
         row = RimeRow(text=text, weight=weight, code=code, stem=stem)
         if row.pair in seen:
-            raise SyncError(f"{path}:{line_number}: duplicate pair {row.pair!r}")
+            raise SyncError(f"{source}:{line_number}: duplicate pair {row.pair!r}")
         seen.add(row.pair)
         rows.append(row)
     return RimeDocument(header=header, rows=tuple(rows))
+
+
+def parse_rime(path: Path) -> RimeDocument:
+    return parse_rime_bytes(path.read_bytes(), path)
 
 
 def render_rime(document: RimeDocument, version: str) -> bytes:
@@ -373,6 +397,20 @@ def _validate_source_size(
                     f"{kind} count change exceeds {percent}% safety limit: "
                     f"{old_count} -> {counts[kind]}"
                 )
+            old_pairs = {
+                entry.pair for entry in old_table.entries if entry.kind == kind
+            }
+            new_pairs = {
+                entry.pair for entry in new_table.entries if entry.kind == kind
+            }
+            removed = len(old_pairs - new_pairs)
+            added = len(new_pairs - old_pairs)
+            if max(removed, added) / old_count > limits.max_pair_churn:
+                percent = round(limits.max_pair_churn * 100)
+                raise SyncError(
+                    f"{kind} pair churn exceeds {percent}% safety limit: "
+                    f"removed={removed}, added={added}, baseline={old_count}"
+                )
     return {kind: counts[kind] for kind in FULL_TARGETS}
 
 
@@ -434,8 +472,10 @@ def synchronize(
     if snapshot_path.exists() != revision_path.exists():
         raise SyncError("upstream snapshot and revision must either both exist or both be absent")
 
-    new_table = parse_upstream(upstream_path)
-    old_table = parse_upstream(snapshot_path) if snapshot_path.exists() else None
+    new_table = parse_upstream(upstream_path, limits=limits)
+    old_table = (
+        parse_upstream(snapshot_path, limits=limits) if snapshot_path.exists() else None
+    )
     old_revision: bytes | None = None
     if revision_path.exists():
         old_revision = revision_path.read_bytes()
@@ -452,6 +492,7 @@ def synchronize(
 
     source_changed = old_table is None or old_table.raw != new_table.raw
     outputs: dict[str, bytes] = {}
+    expected_documents: dict[str, RimeDocument] = {}
     for kind, (relative, default_weight) in FULL_TARGETS.items():
         old_entries = _entries_of_kind(old_table, kind)
         new_entries = _entries_of_kind(new_table, kind)
@@ -480,6 +521,8 @@ def synchronize(
             outputs[COMMON_TARGETS[kind]] = render_rime(
                 common, _header_version(local_common[kind].header)
             )
+        expected_documents[relative] = merged
+        expected_documents[COMMON_TARGETS[kind]] = common
 
     outputs[SNAPSHOT_PATH] = new_table.raw
     if source_changed:
@@ -488,6 +531,11 @@ def synchronize(
         if old_revision is None:
             raise SyncError("stored upstream revision is missing")
         outputs[REVISION_PATH] = old_revision
+
+    for relative, expected in expected_documents.items():
+        rendered = parse_rime_bytes(outputs[relative], f"rendered {relative}")
+        if rendered.rows != expected.rows:
+            raise SyncError(f"rendered {relative} does not preserve expected rows")
 
     changed_paths: list[Path] = []
     for relative in MANAGED_PATHS:

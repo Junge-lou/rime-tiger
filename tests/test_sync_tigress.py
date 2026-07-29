@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,11 +78,25 @@ class UpstreamParserTest(unittest.TestCase):
                     sync.parse_upstream(self.write(content))
 
     def test_rejects_invalid_rows(self) -> None:
-        rows = ("A\t的", "abcde\t词", "a\t词\textra", "a\t")
+        rows = ("A\t的", "abcde\t词", "a\t词\textra", "a\t", "a\t#注释形词条")
         for row in rows:
             with self.subTest(row=row):
                 with self.assertRaises(sync.SyncError):
                     sync.parse_upstream(self.write(f"[Data]\n{row}\n"))
+
+    def test_rejects_source_larger_than_configured_limit(self) -> None:
+        path = self.write("[Data]\na\t常\n")
+        limits = sync.SafetyLimits(max_source_bytes=path.stat().st_size - 1)
+
+        with self.assertRaisesRegex(sync.SyncError, "byte limit"):
+            sync.parse_upstream(path, limits=limits)
+
+    def test_rejects_text_longer_than_configured_limit(self) -> None:
+        path = self.write("[Data]\nabcd\t超长词条\n")
+        limits = sync.SafetyLimits(max_text_length=3)
+
+        with self.assertRaisesRegex(sync.SyncError, "text length"):
+            sync.parse_upstream(path, limits=limits)
 
     def test_rejects_invalid_utf8(self) -> None:
         with self.assertRaisesRegex(sync.SyncError, "UTF-8"):
@@ -304,12 +320,13 @@ class RepositorySyncTest(unittest.TestCase):
         )
 
     @staticmethod
-    def limits(max_delta: float = 1.0):
+    def limits(max_delta: float = 1.0, max_pair_churn: float = 1.0):
         return sync.SafetyLimits(
             chars=1,
             full_words=1,
             short_words=1,
             max_delta=max_delta,
+            max_pair_churn=max_pair_churn,
         )
 
     def test_synchronizes_all_targets_and_is_idempotent(self) -> None:
@@ -443,11 +460,50 @@ class RepositorySyncTest(unittest.TestCase):
                 grown,
                 revision="e" * 40,
                 version="2026.07.29",
-                limits=self.limits(max_delta=0.20),
+                limits=self.limits(max_delta=0.20, max_pair_churn=0.20),
             )
         self.assertEqual(
             (self.repo / "vendor/tiger-code/tables/tiger.txt").read_bytes(), before
         )
+
+    def test_rejects_same_count_wholesale_pair_replacement(self) -> None:
+        old = self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        new = self.upstream_bytes(("b", "新"), ("efgh", "新词"), ("bc", "新简"))
+        self.install_old_snapshot(old)
+        upstream = self.write_upstream(new)
+
+        with self.assertRaisesRegex(sync.SyncError, "pair churn"):
+            sync.synchronize(
+                self.repo,
+                upstream,
+                revision="e" * 40,
+                version="2026.07.29",
+                limits=self.limits(max_delta=0.20, max_pair_churn=0.20),
+            )
+
+    def test_rejects_corrupt_rendered_output_before_any_write(self) -> None:
+        old = self.upstream_bytes(("a", "常"), ("abcd", "旧词"), ("ab", "简词"))
+        new = self.upstream_bytes(("a", "常"), ("newc", "新词"), ("bc", "新简"))
+        self.install_old_snapshot(old)
+        upstream = self.write_upstream(new)
+        original = (self.repo / "tigress.dict.yaml").read_bytes()
+        original_render = sync.render_rime
+
+        def drop_last_row(document, version):
+            lines = original_render(document, version).splitlines(keepends=True)
+            return b"".join(lines[:-1])
+
+        with mock.patch.object(sync, "render_rime", side_effect=drop_last_row):
+            with self.assertRaisesRegex(sync.SyncError, "rendered"):
+                sync.synchronize(
+                    self.repo,
+                    upstream,
+                    revision="e" * 40,
+                    version="2026.07.29",
+                    limits=self.limits(),
+                )
+
+        self.assertEqual((self.repo / "tigress.dict.yaml").read_bytes(), original)
 
     def test_rejects_invalid_target_before_any_write(self) -> None:
         upstream = self.write_upstream(
@@ -545,12 +601,51 @@ class WorkflowTest(unittest.TestCase):
 
     def test_runs_all_repository_test_types(self) -> None:
         workflow = self.path.read_text(encoding="utf-8")
+        runner = (ROOT / "scripts" / "run_tests.sh").read_text(encoding="utf-8")
 
-        self.assertIn("python3 -m unittest discover", workflow)
-        self.assertIn('tests/*_test.lua', workflow)
-        self.assertIn('lua "$test_file"', workflow)
-        self.assertIn('tests/*_test.js', workflow)
-        self.assertIn('node "$test_file"', workflow)
+        self.assertIn("scripts/run_tests.sh", workflow)
+        self.assertIn("python3 -m unittest discover", runner)
+        self.assertIn("tests/*_test.lua", runner)
+        self.assertIn('lua "$test_file"', runner)
+        self.assertIn("tests/*_test.js", runner)
+        self.assertIn('node "$test_file"', runner)
+
+    def test_test_runner_tolerates_suites_with_no_matching_scripts(self) -> None:
+        runner = ROOT / "scripts" / "run_tests.sh"
+        self.assertTrue(runner.is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            (fixture / "scripts").mkdir()
+            (fixture / "tests").mkdir()
+            shutil.copyfile(runner, fixture / "scripts" / "run_tests.sh")
+            (fixture / "tests" / "test_smoke.py").write_text(
+                "import unittest\n\n"
+                "class SmokeTest(unittest.TestCase):\n"
+                "    def test_passes(self):\n"
+                "        self.assertTrue(True)\n",
+                encoding="ascii",
+            )
+
+            result = subprocess.run(
+                ["bash", "scripts/run_tests.sh"],
+                cwd=fixture,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pins_third_party_actions_to_immutable_commits(self) -> None:
+        workflow = self.path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "actions/checkout@11d5960a326750d5838078e36cf38b85af677262", workflow
+        )
+        self.assertIn(
+            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            workflow,
+        )
 
     def test_allows_only_managed_runtime_paths(self) -> None:
         workflow = self.path.read_text(encoding="utf-8")
@@ -562,7 +657,7 @@ class WorkflowTest(unittest.TestCase):
     def test_commits_only_after_tests_and_pushes_main(self) -> None:
         workflow = self.path.read_text(encoding="utf-8")
 
-        test_position = workflow.index("python3 -m unittest discover")
+        test_position = workflow.index("scripts/run_tests.sh")
         commit_position = workflow.index("git commit")
         self.assertLess(test_position, commit_position)
         self.assertIn("github-actions[bot]", workflow)
