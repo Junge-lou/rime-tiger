@@ -2,14 +2,14 @@
 'use strict';
 
 const DEFAULT_PREVIEW_CANDIDATES = [
-  { label: '1', text: '你好', comment: '常用' },
-  { label: '2', text: '你', comment: '单字' },
-  { label: '3', text: '年', comment: '' },
-  { label: '4', text: '候选文本比较长', comment: '长词' },
-  { label: '5', text: '候選', comment: '异体' },
+  { label: '1', text: '是', comment: '{{quick_code}}' },
+  { label: '2', text: '试', comment: '{{quick_code}}' },
+  { label: '3', text: '说', comment: '' },
+  { label: '4', text: '谁', comment: '' },
+  { label: '5', text: '上', comment: '' },
 ];
-const DEFAULT_PREVIEW_CODE = 'nihao';
-const DEFAULT_PREVIEW_CANDIDATES_TEXT = '你好\t常用\n你\t单字\n拟\n候选文本比较长\t长词\n候選\t异体';
+const DEFAULT_PREVIEW_CODE = 'u';
+const DEFAULT_PREVIEW_CANDIDATES_TEXT = '是\t{{quick_code}}\n试\t{{quick_code}}\n说\n谁\n上';
 
 function colorIsVisible(color) {
   return Boolean(color && (color.a ?? 255) > 0);
@@ -76,8 +76,13 @@ function previewCandidateItems(source, fallback = DEFAULT_PREVIEW_CANDIDATES) {
   const lines = raw ? raw.split(/\r?\n/) : [];
   const items = lines
     .map((line) => parsePreviewCandidateLine(line))
-    .filter((item) => item.text);
+    .filter((item) => item.text)
+    .map((item, index) => ({ label: String(index + 1), ...item }));
   return items.length ? items : fallback;
+}
+
+function resolvePreviewComment(comment, indicators = {}) {
+  return String(comment || '').replace(/\{\{quick_code\}\}/g, String(indicators.quickCodeIndicator || ''));
 }
 
 function applyAlpha(color, alpha) {
@@ -96,6 +101,7 @@ const api = {
   markerBehavior,
   parsePreviewCandidateLine,
   previewCandidateItems,
+  resolvePreviewComment,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

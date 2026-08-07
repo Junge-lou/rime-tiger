@@ -23,7 +23,7 @@ FRONTEND_FILES = {'squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.
 STATIC_ROOT = Path(__file__).resolve().parents[1]
 
 
-def resolve_allowed_path(root, requested_path):
+def resolve_allowed_path(root, requested_path, write=False):
     raw = str(requested_path or '')
     if not raw or raw.startswith('/') or raw.startswith('\\') or '\0' in raw:
         raise ValueError('不允许访问这个路径。')
@@ -33,9 +33,11 @@ def resolve_allowed_path(root, requested_path):
 
     is_frontend_file = len(parts) == 1 and parts[0] in FRONTEND_FILES
     is_custom_file = len(parts) == 1 and parts[0].endswith('.custom.yaml')
-    is_schema_file = len(parts) == 1 and parts[0].endswith('.schema.yaml')
+    is_yaml_file = len(parts) == 1 and parts[0].endswith('.yaml')
     is_backup_file = len(parts) >= 2 and parts[0] == BACKUP_ROOT
-    if not is_frontend_file and not is_custom_file and not is_schema_file and not is_backup_file:
+    readable = is_frontend_file or is_custom_file or is_yaml_file or is_backup_file
+    writable = is_frontend_file or is_custom_file or is_backup_file
+    if not readable or (write and not writable):
         raise ValueError('不允许访问这个路径。')
 
     root_path = Path(root).resolve()
@@ -55,6 +57,7 @@ def read_config_snapshot(root):
         'squirrel': 'squirrel.custom.yaml',
         'weasel': 'weasel.custom.yaml',
         'default': 'default.custom.yaml',
+        'user': 'user.yaml',
     }.items():
         file_path = resolve_allowed_path(root_path, filename)
         exists = file_path.exists()
@@ -66,7 +69,9 @@ def read_config_snapshot(root):
         'rawFiles': raw_files,
         'fileExists': file_exists,
         'customFiles': read_root_custom_files(root_path),
+        'yamlFiles': read_root_yaml_files(root_path),
         'hasAnySchemaFile': any(path.is_file() and path.name.endswith('.schema.yaml') for path in root_path.iterdir()),
+        'deploySupported': find_deploy_command() is not None,
     }
 
 
@@ -78,6 +83,49 @@ def read_root_custom_files(root_path):
         file_path = resolve_allowed_path(root_path, path.name)
         result.append({'name': path.name, 'text': file_path.read_text(encoding='utf-8')})
     return result
+
+
+def read_root_yaml_files(root_path):
+    result = []
+    for path in sorted(root_path.glob('*.yaml'), key=lambda item: item.name):
+        if path.name.endswith(('.dict.yaml', '.custom.yaml')) or path.name in {'installation.yaml', 'user.yaml'}:
+            continue
+        result.append({'name': path.name, 'text': path.read_text(encoding='utf-8')})
+    return result
+
+
+def find_deploy_command(platform=None, exists=None, globber=None):
+    platform = platform or sys.platform
+    exists = exists or (lambda path: Path(path).is_file())
+    globber = globber or (lambda root: root.rglob('WeaselDeployer.exe'))
+    if platform == 'darwin':
+        executable = '/Library/Input Methods/Squirrel.app/Contents/MacOS/Squirrel'
+        return [executable, '--reload'] if exists(executable) else None
+    if platform.startswith('win'):
+        roots = [os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)'), os.environ.get('LOCALAPPDATA')]
+        for root in filter(None, roots):
+            rime_root = Path(root) / 'Rime'
+            candidates = [
+                rime_root / 'weasel' / 'WeaselDeployer.exe',
+                rime_root / 'Weasel' / 'WeaselDeployer.exe',
+                *globber(rime_root),
+            ]
+            for candidate in candidates:
+                executable = str(candidate)
+                if exists(executable):
+                    return [executable, '/deploy']
+    return None
+
+
+def deploy_rime(root):
+    command = find_deploy_command()
+    if not command:
+        raise RuntimeError('未找到可用的 Rime 部署程序。')
+    completed = subprocess.run(command, cwd=str(root), capture_output=True, text=True, timeout=120, check=False)
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or '').strip()
+        raise RuntimeError(message or f'Rime 部署失败，退出码 {completed.returncode}。')
+    return {'ok': True, 'output': (completed.stdout or '').strip()}
 
 
 def list_backups(root):
@@ -162,6 +210,9 @@ class RimeEditorHandler(BaseHTTPRequestHandler):
             self.send_json(200, {'ok': True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
+        if self.command == 'POST' and parsed.path == '/api/deploy':
+            self.send_json(200, deploy_rime(self.root))
+            return
         if self.command == 'GET' and parsed.path == '/api/config':
             self.send_json(200, read_config_snapshot(self.root))
             return
@@ -182,21 +233,21 @@ class RimeEditorHandler(BaseHTTPRequestHandler):
             return
         if self.command == 'PUT' and parsed.path == '/api/file':
             body = self.read_json_body()
-            target = resolve_allowed_path(self.root, body.get('path', ''))
+            target = resolve_allowed_path(self.root, body.get('path', ''), write=True)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(str(body.get('text', '')), encoding='utf-8')
             self.send_json(200, {'ok': True})
             return
         if self.command == 'DELETE' and parsed.path == '/api/file':
             path = query.get('path', [''])[0]
-            target = resolve_allowed_path(self.root, path)
+            target = resolve_allowed_path(self.root, path, write=True)
             if target.exists():
                 target.unlink()
             self.send_json(200, {'ok': True})
             return
         if self.command == 'POST' and parsed.path == '/api/mkdir':
             body = self.read_json_body()
-            target = resolve_allowed_path(self.root, f"{body.get('path', '')}/manifest.json")
+            target = resolve_allowed_path(self.root, f"{body.get('path', '')}/manifest.json", write=True)
             target.parent.mkdir(parents=True, exist_ok=True)
             self.send_json(200, {'ok': True})
             return

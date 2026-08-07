@@ -72,7 +72,7 @@ function M.init(env)
       end
     end)
   end
-  option_state.save_many_from_context(env, option_names(env), true)
+  sync_options(env, true)
 end
 
 function M.fini(env)

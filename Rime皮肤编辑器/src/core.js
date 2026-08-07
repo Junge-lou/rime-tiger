@@ -272,6 +272,12 @@ function parseGlobalCustomFiles(files = []) {
   return { layout: {}, sources: {} };
 }
 
+function parseUserSelectedSchema(text) {
+  if (!String(text || '').trim()) return '';
+  const doc = parseYaml(text);
+  return String(doc?.var?.previously_selected_schema || '').trim();
+}
+
 function updateGlobalCustomConfig(text, layout = {}) {
   validatePatchObject(parseYaml(text || 'patch:\n'), 'custom.yaml');
   let output = ensurePatchText(text || 'patch:\n');
@@ -798,6 +804,15 @@ function upsertNestedValue(text, path, value) {
   return upsertNestedBlock(text, path, value);
 }
 
+function updateCustomScalar(text, path, value) {
+  const normalizedPath = Array.isArray(path)
+    ? path.map((part) => String(part)).filter(Boolean)
+    : String(path || '').split('/').filter(Boolean);
+  if (!normalizedPath.length) throw new Error('缺少要写入的配置路径。');
+  const output = ensureNestedObjectPath(text, ['patch']);
+  return ensureTrailingNewline(upsertNestedValue(output, ['patch', normalizedPath.join('/')], value));
+}
+
 function upsertObjectFields(text, path, fields) {
   let output = ensurePatchText(text);
   output = ensureNestedObjectPath(output, path);
@@ -1127,10 +1142,12 @@ const RimeSkinCore = {
   parseSquirrelConfig,
   parseWeaselConfig,
   parseGlobalCustomFiles,
+  parseUserSelectedSchema,
   updateActiveSkinConfig,
   updateSquirrelConfig,
   updateWeaselConfig,
   updateGlobalCustomConfig,
+  updateCustomScalar,
   deleteSquirrelSkinConfig,
   deleteWeaselSkinConfig,
   copySkinToPlatform,

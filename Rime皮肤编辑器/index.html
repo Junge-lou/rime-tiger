@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Rime 皮肤编辑器 - 晴</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
@@ -81,18 +82,18 @@
                 </label>
                 <label>
                   <span>编码</span>
-                  <input id="previewCode" type="text" value="nihao">
+                  <input id="previewCode" type="text" value="u">
                 </label>
                 <label class="preview-candidates-field">
                   <span class="label-with-help">
                     候选
                     <span class="help-dot" tabindex="0" title="每行一个候选。只写词条则不显示注释；词条和注释可用 Tab、竖线 |、英文逗号 , 或两个以上空格分隔。例如：你好|常用。">?</span>
                   </span>
-                  <textarea id="previewCandidates" rows="4">你好	常用
-你	单字
-拟
-候选文本比较长	长词
-候選	异体</textarea>
+                  <textarea id="previewCandidates" rows="4">是	{{quick_code}}
+试	{{quick_code}}
+说
+谁
+上</textarea>
                 </label>
                 <button id="resetPreviewSettingsButton" type="button">恢复默认设置</button>
               </div>
@@ -306,6 +307,19 @@
         </section>
 
         <aside class="inspector">
+          <details id="schemaSettingsPanel" class="panel" open hidden>
+            <summary>方案设置</summary>
+            <div class="schema-toolbar">
+              <label>
+                <span>输入方案</span>
+                <select id="schemaSelect"></select>
+              </label>
+              <button id="refreshSchemasButton" class="icon-button" type="button" title="重新扫描方案" aria-label="重新扫描方案">↻</button>
+            </div>
+            <div id="schemaSettingsControls" class="control-grid"></div>
+            <button id="saveSchemaSettingsButton" type="button">保存方案设置</button>
+          </details>
+
           <details class="panel" open>
             <summary>当前皮肤</summary>
             <label>
@@ -331,7 +345,7 @@
             <button id="saveButton" class="primary">保存并备份</button>
             <button id="copyButton">复制到另一平台</button>
             <button id="reloadBackupsButton">刷新备份</button>
-            <p class="hint">保存或回退后，请重新部署 Rime。</p>
+            <p id="deployHint" class="hint">本地启动器可在保存后自动应用；浏览器模式需要手动部署。</p>
           </details>
 
           <details class="panel backups">
@@ -349,6 +363,7 @@
 
     <script src="./src/core.js"></script>
     <script src="./src/preview-model.js"></script>
+    <script src="./src/schema-settings.js"></script>
     <script src="./src/app.js"></script>
   </body>
 </html>

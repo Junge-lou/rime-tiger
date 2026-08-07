@@ -32,7 +32,7 @@ $TokenRng.Dispose()
 $Token = -join ($TokenBytes | ForEach-Object { $_.ToString('x2') })
 
 function Resolve-AllowedPath {
-  param([string]$RequestedPath)
+  param([string]$RequestedPath, [switch]$Write)
   if ([string]::IsNullOrWhiteSpace($RequestedPath) -or $RequestedPath.StartsWith('/') -or $RequestedPath.StartsWith('\') -or $RequestedPath.Contains([char]0)) {
     throw $AccessDeniedMessage
   }
@@ -40,9 +40,11 @@ function Resolve-AllowedPath {
   if ($Parts -contains '..') { throw $AccessDeniedMessage }
   $IsFrontendFile = $Parts.Count -eq 1 -and @('squirrel.custom.yaml', 'weasel.custom.yaml', 'default.custom.yaml') -contains $Parts[0]
   $IsCustomFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.custom.yaml')
-  $IsSchemaFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.schema.yaml')
+  $IsYamlFile = $Parts.Count -eq 1 -and $Parts[0].EndsWith('.yaml')
   $IsBackupFile = $Parts.Count -ge 2 -and $Parts[0] -eq $BackupRoot
-  if (-not ($IsFrontendFile -or $IsCustomFile -or $IsSchemaFile -or $IsBackupFile)) { throw $AccessDeniedMessage }
+  $Readable = $IsFrontendFile -or $IsCustomFile -or $IsYamlFile -or $IsBackupFile
+  $Writable = $IsFrontendFile -or $IsCustomFile -or $IsBackupFile
+  if (-not $Readable -or ($Write -and -not $Writable)) { throw $AccessDeniedMessage }
   $TargetPath = $Root
   foreach ($Part in $Parts) {
     $TargetPath = Join-Path $TargetPath $Part
@@ -166,7 +168,8 @@ function Get-ConfigSnapshot {
   foreach ($Item in @(
     @('squirrel', 'squirrel.custom.yaml'),
     @('weasel', 'weasel.custom.yaml'),
-    @('default', 'default.custom.yaml')
+    @('default', 'default.custom.yaml'),
+    @('user', 'user.yaml')
   )) {
     $Path = Resolve-AllowedPath $Item[1]
     $Exists = Test-Path $Path -PathType Leaf
@@ -179,8 +182,38 @@ function Get-ConfigSnapshot {
     rawFiles = $RawFiles
     fileExists = $FileExists
     customFiles = @(Get-RootCustomFiles)
+    yamlFiles = @(Get-RootYamlFiles)
     hasAnySchemaFile = [bool](Get-ChildItem $Root -File -Filter '*.schema.yaml' -ErrorAction SilentlyContinue | Select-Object -First 1)
+    deploySupported = [bool](Get-DeployCommand)
   }
+}
+
+function Get-RootYamlFiles {
+  $Items = @()
+  foreach ($File in Get-ChildItem $Root -File -Filter '*.yaml' -ErrorAction SilentlyContinue | Sort-Object Name) {
+    if ($File.Name.EndsWith('.dict.yaml') -or $File.Name.EndsWith('.custom.yaml') -or @('installation.yaml', 'user.yaml') -contains $File.Name) { continue }
+    $Items += @{ name = $File.Name; text = Get-Content $File.FullName -Raw -Encoding UTF8 }
+  }
+  return $Items
+}
+
+function Get-DeployCommand {
+  $SearchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) | Where-Object { $_ }
+  foreach ($SearchRoot in $SearchRoots) {
+    $RimeRoot = Join-Path $SearchRoot 'Rime'
+    if (-not (Test-Path $RimeRoot -PathType Container)) { continue }
+    $Executable = Get-ChildItem $RimeRoot -File -Filter 'WeaselDeployer.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($Executable) { return @($Executable.FullName, '/deploy') }
+  }
+  return $null
+}
+
+function Invoke-RimeDeploy {
+  $Command = @(Get-DeployCommand)
+  if ($Command.Count -lt 2) { throw 'Rime deployer was not found.' }
+  $Process = Start-Process -FilePath $Command[0] -ArgumentList $Command[1] -WorkingDirectory $Root -Wait -PassThru
+  if ($Process.ExitCode -ne 0) { throw "Rime deploy failed with exit code $($Process.ExitCode)." }
+  return @{ ok = $true }
 }
 
 function Get-RootCustomFiles {
@@ -288,6 +321,10 @@ while ($Listener.IsListening) {
         $Listener.Stop()
         break
       }
+      if ($Request.HttpMethod -eq 'POST' -and $Path -eq '/api/deploy') {
+        Send-Json $Response 200 (Invoke-RimeDeploy)
+        continue
+      }
       if ($Request.HttpMethod -eq 'GET' -and $Path -eq '/api/config') {
         Send-Json $Response 200 (Get-ConfigSnapshot)
         continue
@@ -312,21 +349,21 @@ while ($Listener.IsListening) {
       }
       if ($Request.HttpMethod -eq 'PUT' -and $Path -eq '/api/file') {
         $Body = Read-BodyJson $Request
-        $FilePath = Resolve-AllowedPath $Body.path
+        $FilePath = Resolve-AllowedPath $Body.path -Write
         New-Item -ItemType Directory -Force -Path (Split-Path $FilePath -Parent) | Out-Null
         Set-Content -Path $FilePath -Value ([string]$Body.text) -Encoding UTF8 -NoNewline
         Send-Json $Response 200 @{ ok = $true }
         continue
       }
       if ($Request.HttpMethod -eq 'DELETE' -and $Path -eq '/api/file') {
-        $FilePath = Resolve-AllowedPath (Get-QueryValue $Request 'path')
+        $FilePath = Resolve-AllowedPath (Get-QueryValue $Request 'path') -Write
         if (Test-Path $FilePath -PathType Leaf) { Remove-Item $FilePath -Force }
         Send-Json $Response 200 @{ ok = $true }
         continue
       }
       if ($Request.HttpMethod -eq 'POST' -and $Path -eq '/api/mkdir') {
         $Body = Read-BodyJson $Request
-        $Marker = Resolve-AllowedPath "$($Body.path)/manifest.json"
+        $Marker = Resolve-AllowedPath "$($Body.path)/manifest.json" -Write
         New-Item -ItemType Directory -Force -Path (Split-Path $Marker -Parent) | Out-Null
         Send-Json $Response 200 @{ ok = $true }
         continue

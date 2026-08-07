@@ -14,6 +14,8 @@ const {
   formatBackupFolderName,
   generateSkinId,
   parseGlobalCustomFiles,
+  parseUserSelectedSchema,
+  parseYaml,
   parseSquirrelConfig,
   parseWeaselConfig,
   parseSkinPackage,
@@ -26,12 +28,15 @@ const {
 const previewModel = window.RimeSkinPreviewModel || {};
 const {
   DEFAULT_PREVIEW_CANDIDATES = [],
-  DEFAULT_PREVIEW_CODE = 'nihao',
+  DEFAULT_PREVIEW_CODE = 'u',
   DEFAULT_PREVIEW_CANDIDATES_TEXT = '',
   applyAlpha,
   markerBehavior,
   previewCandidateItems: parsePreviewCandidateItems,
+  resolvePreviewComment,
 } = previewModel;
+const schemaSettingsApi = window.RimeSchemaSettings || {};
+const { buildSchemaCatalog, customFilesForSchema, discoverSchemaSettings, updateSchemaSetting } = schemaSettingsApi;
 
 const BACKUP_ROOT = 'Rime皮肤编辑器备份';
 const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -163,7 +168,7 @@ const PREVIEW_CANDIDATES = [
   { label: '4', text: '候选文本比较长', comment: '长词' },
   { label: '5', text: '候選', comment: '异体' },
 ];
-const PREVIEW_SETTINGS_STORAGE_KEY = 'rimeSkinEditor.previewSettings.v1';
+const PREVIEW_SETTINGS_STORAGE_KEY = 'rimeSkinEditor.previewSettings.v2';
 
 const state = {
   capability: null,
@@ -185,15 +190,21 @@ const state = {
     squirrel: '',
     weasel: '',
     default: '',
+    user: '',
   },
   customFiles: [],
+  yamlFiles: [],
+  schemas: [],
+  currentSchemaId: '',
+  selectedSchemaId: '',
+  schemaSettings: [],
+  deploySupported: false,
   globalLayout: {},
   globalSources: {},
   hasAnySchemaFile: false,
   selectedPlatform: 'squirrel',
   selectedSkinId: '',
   originalSkinId: '',
-  pendingActiveDraft: null,
   draftSkin: null,
   previewActiveCandidateIndex: 0,
   previewScale: 100,
@@ -323,6 +334,12 @@ function bindDom() {
     'reloadBackupsButton',
     'backupList',
     'messageLog',
+    'schemaSettingsPanel',
+    'schemaSelect',
+    'refreshSchemasButton',
+    'schemaSettingsControls',
+    'saveSchemaSettingsButton',
+    'deployHint',
   ]) {
     dom[id] = document.getElementById(id);
   }
@@ -367,6 +384,12 @@ function bindEvents() {
   dom.saveButton.addEventListener('click', saveCurrentSkin);
   dom.copyButton.addEventListener('click', copyCurrentSkin);
   dom.reloadBackupsButton.addEventListener('click', refreshBackups);
+  dom.schemaSelect.addEventListener('change', () => {
+    state.selectedSchemaId = dom.schemaSelect.value;
+    renderSchemaSettings();
+  });
+  dom.refreshSchemasButton.addEventListener('click', refreshSchemaFiles);
+  dom.saveSchemaSettingsButton.addEventListener('click', saveSchemaSettings);
 
   dom.displayName.addEventListener('input', () => updateDraftText('displayName', dom.displayName.value));
   dom.author.addEventListener('input', () => updateDraftText('author', dom.author.value));
@@ -489,28 +512,23 @@ async function loadConfigs() {
 async function loadConfigsFromLocalApi() {
   const snapshot = await localApi('config');
   const customFiles = snapshot.customFiles || [];
-  const global = parseGlobalCustomFiles(globalCustomFilesForParse(customFiles, snapshot.rawFiles?.default || ''));
   return {
     folderName: snapshot.folderName || '本地 Rime 配置目录',
     rootPath: snapshot.rootPath || '',
     configs: {
-      squirrel: mergeGlobalLayoutIntoConfig(
-        snapshot.rawFiles?.squirrel ? parseSquirrelConfig(snapshot.rawFiles.squirrel) : emptyConfig('squirrel'),
-        global.layout,
-      ),
-      weasel: mergeGlobalLayoutIntoConfig(
-        snapshot.rawFiles?.weasel ? parseWeaselConfig(snapshot.rawFiles.weasel) : emptyConfig('weasel'),
-        global.layout,
-      ),
+      squirrel: snapshot.rawFiles?.squirrel ? parseSquirrelConfig(snapshot.rawFiles.squirrel) : emptyConfig('squirrel'),
+      weasel: snapshot.rawFiles?.weasel ? parseWeaselConfig(snapshot.rawFiles.weasel) : emptyConfig('weasel'),
     },
     rawFiles: {
       squirrel: snapshot.rawFiles?.squirrel || '',
       weasel: snapshot.rawFiles?.weasel || '',
       default: snapshot.rawFiles?.default || '',
+      user: snapshot.rawFiles?.user || '',
     },
     customFiles,
-    globalLayout: global.layout,
-    globalSources: global.sources,
+    yamlFiles: snapshot.yamlFiles || [],
+    deploySupported: Boolean(snapshot.deploySupported),
+    currentSchemaId: parseUserSelectedSchema(snapshot.rawFiles?.user || ''),
     fileExists: {
       squirrel: Boolean(snapshot.fileExists?.squirrel),
       weasel: Boolean(snapshot.fileExists?.weasel),
@@ -527,8 +545,11 @@ async function loadConfigsFromHandle(dirHandle) {
     rawFiles: {},
     fileExists: {},
     customFiles: [],
+    yamlFiles: [],
+    deploySupported: false,
     globalLayout: {},
     globalSources: {},
+    currentSchemaId: '',
     hasAnySchemaFile: false,
   };
   for (const platform of Object.keys(PLATFORM_FILES)) {
@@ -542,12 +563,11 @@ async function loadConfigsFromHandle(dirHandle) {
   const defaultEntry = await readOptionalFileEntry('default.custom.yaml', dirHandle);
   loaded.fileExists.default = defaultEntry.exists;
   loaded.rawFiles.default = defaultEntry.text;
+  const userEntry = await readOptionalFileEntry('user.yaml', dirHandle);
+  loaded.rawFiles.user = userEntry.text;
+  loaded.currentSchemaId = parseUserSelectedSchema(userEntry.text);
   loaded.customFiles = await readRootCustomFiles(dirHandle);
-  const global = parseGlobalCustomFiles(globalCustomFilesForParse(loaded.customFiles, loaded.rawFiles.default));
-  loaded.globalLayout = global.layout;
-  loaded.globalSources = global.sources;
-  loaded.configs.squirrel = mergeGlobalLayoutIntoConfig(loaded.configs.squirrel, loaded.globalLayout);
-  loaded.configs.weasel = mergeGlobalLayoutIntoConfig(loaded.configs.weasel, loaded.globalLayout);
+  loaded.yamlFiles = await readRootYamlFiles(dirHandle);
   loaded.hasAnySchemaFile = await directoryHasSchemaFile(dirHandle);
   return loaded;
 }
@@ -560,19 +580,140 @@ function applyLoadedConfigs(dirHandle, loaded) {
   state.rawFiles.squirrel = loaded.rawFiles.squirrel;
   state.rawFiles.weasel = loaded.rawFiles.weasel;
   state.rawFiles.default = loaded.rawFiles.default;
+  state.rawFiles.user = loaded.rawFiles.user || '';
   state.customFiles = loaded.customFiles || [];
+  state.yamlFiles = loaded.yamlFiles || [];
+  state.currentSchemaId = loaded.currentSchemaId || '';
+  if (state.currentSchemaId) state.selectedSchemaId = state.currentSchemaId;
+  state.deploySupported = Boolean(loaded.deploySupported);
   state.globalLayout = loaded.globalLayout || {};
   state.globalSources = loaded.globalSources || {};
   state.fileExists.squirrel = loaded.fileExists.squirrel;
   state.fileExists.weasel = loaded.fileExists.weasel;
   state.fileExists.default = loaded.fileExists.default;
   state.hasAnySchemaFile = loaded.hasAnySchemaFile;
+  refreshSchemaCatalog();
 }
 
-function globalCustomFilesForParse(customFiles = state.customFiles, defaultText = state.rawFiles.default) {
-  const files = [...(customFiles || [])];
-  if (defaultText) files.push({ name: 'default.custom.yaml', text: defaultText });
-  return files;
+async function readRootYamlFiles(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== 'file' || !name.endsWith('.yaml') || name.endsWith('.dict.yaml') || name.endsWith('.custom.yaml')) continue;
+    if (name === 'installation.yaml' || name === 'user.yaml') continue;
+    const file = await handle.getFile();
+    files.push({ name, text: await file.text() });
+  }
+  return files.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function refreshSchemaCatalog() {
+  if (typeof buildSchemaCatalog !== 'function') return;
+  state.schemas = buildSchemaCatalog(state.yamlFiles, state.rawFiles.default);
+  const enabled = state.schemas.filter((schema) => schema.enabled);
+  if (!state.schemas.some((schema) => schema.id === state.currentSchemaId)) {
+    state.currentSchemaId = enabled[0]?.id || state.schemas[0]?.id || '';
+  }
+  const capable = state.schemas.filter((schema) => discoverSchemaSettings(schema, state.yamlFiles).length);
+  if (!capable.some((schema) => schema.id === state.selectedSchemaId)) {
+    state.selectedSchemaId = capable.some((schema) => schema.id === state.currentSchemaId)
+      ? state.currentSchemaId
+      : capable[0]?.id || '';
+  }
+  applyCurrentSchemaLayout();
+  renderSchemaSettings();
+}
+
+function currentSchemaCustomFiles() {
+  if (typeof customFilesForSchema !== 'function') return [];
+  return customFilesForSchema(state.currentSchemaId, state.customFiles);
+}
+
+function applyCurrentSchemaLayout() {
+  const scoped = parseGlobalCustomFiles(currentSchemaCustomFiles());
+  state.globalLayout = scoped.layout;
+  state.globalSources = scoped.sources;
+  for (const platform of Object.keys(PLATFORM_FILES)) {
+    const base = state.rawFiles[platform] ? parseConfig(platform, state.rawFiles[platform]) : emptyConfig(platform);
+    state.configs[platform] = mergeGlobalLayoutIntoConfig(base, state.globalLayout);
+  }
+}
+
+function currentSchemaSettingValue(settingId) {
+  const schema = state.schemas.find((item) => item.id === state.currentSchemaId);
+  const setting = discoverSchemaSettings(schema, state.yamlFiles).find((item) => item.id === settingId);
+  if (!setting) return '';
+  for (const file of currentSchemaCustomFiles()) {
+    const patch = parseYaml(file.text).patch || {};
+    if (Object.prototype.hasOwnProperty.call(patch, setting.path)) return String(patch[setting.path] ?? '');
+  }
+  return setting.value;
+}
+
+async function refreshSchemaFiles() {
+  try {
+    const loaded = state.storageMode === 'local' ? await loadConfigsFromLocalApi() : await loadConfigsFromHandle(state.dirHandle);
+    applyLoadedConfigs(state.dirHandle, loaded);
+    renderSchemaSettings();
+    logMessage('已重新扫描输入方案。');
+  } catch (error) {
+    logMessage(`扫描方案失败：${error.message}`);
+  }
+}
+
+function renderSchemaSettings() {
+  if (!dom.schemaSettingsPanel || typeof discoverSchemaSettings !== 'function') return;
+  dom.schemaSelect.replaceChildren();
+  const capable = state.schemas.filter((item) => discoverSchemaSettings(item, state.yamlFiles).length);
+  for (const schema of capable) {
+    const option = document.createElement('option');
+    option.value = schema.id;
+    option.textContent = `${schema.name}${schema.enabled ? ' · 已启用' : ''}`;
+    dom.schemaSelect.append(option);
+  }
+  dom.schemaSelect.value = state.selectedSchemaId;
+  const schema = state.schemas.find((item) => item.id === state.selectedSchemaId);
+  state.schemaSettings = discoverSchemaSettings(schema, state.yamlFiles);
+  const custom = state.customFiles.find((file) => file.name === `${state.selectedSchemaId}.custom.yaml`);
+  const patch = custom ? (parseYaml(custom.text).patch || {}) : {};
+  dom.schemaSettingsControls.replaceChildren();
+  for (const setting of state.schemaSettings) {
+    const label = document.createElement('label');
+    const title = document.createElement('span');
+    title.textContent = setting.label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = Object.prototype.hasOwnProperty.call(patch, setting.path) ? String(patch[setting.path]) : setting.value;
+    input.dataset.settingPath = setting.path;
+    label.append(title, input);
+    dom.schemaSettingsControls.append(label);
+  }
+  const visible = Boolean(capable.length && state.schemaSettings.length);
+  dom.schemaSettingsPanel.hidden = !visible;
+}
+
+async function saveSchemaSettings() {
+  const schema = state.schemas.find((item) => item.id === state.selectedSchemaId);
+  if (!schema || !state.schemaSettings.length || !hasWritableStorage()) return;
+  const filename = `${schema.id}.custom.yaml`;
+  try {
+    const current = await readOptionalFileEntry(filename);
+    let output = current.exists ? current.text : 'patch:\n';
+    for (const input of dom.schemaSettingsControls.querySelectorAll('[data-setting-path]')) {
+      output = updateSchemaSetting(output, input.dataset.settingPath, input.value);
+    }
+    await backupFiles(`保存方案设置-${schema.id}`, [filename], {
+      operation: 'save', sourcePlatform: '', targetPlatform: '', skinIdBefore: schema.id, skinIdAfter: schema.id,
+      createdFiles: current.exists ? [] : [filename],
+    }, { [filename]: current });
+    await writeFile(filename, output);
+    upsertCustomFileState(filename, output);
+    refreshSchemaCatalog();
+    await refreshBackups();
+    renderSchemaSettings();
+    await deployAfterWrite(`已保存「${schema.name}」方案设置`);
+  } catch (error) {
+    logMessage(`保存方案设置失败：${error.message}`);
+  }
 }
 
 async function readRootCustomFiles(dirHandle) {
@@ -702,7 +843,6 @@ function selectSkin(id) {
   const skin = config.skins.find((item) => item.id === id) || config.skins[0] || null;
   state.selectedSkinId = skin?.id || '';
   state.originalSkinId = skin?.id || '';
-  state.pendingActiveDraft = null;
   state.draftSkin = skin ? cloneSkin(skin) : null;
   state.previewActiveCandidateIndex = 0;
   rememberGlobalLayoutSources();
@@ -725,7 +865,6 @@ function createNewSkin() {
   rememberGlobalLayoutSources();
   state.selectedSkinId = id;
   state.originalSkinId = '';
-  state.pendingActiveDraft = null;
   state.previewActiveCandidateIndex = 0;
   renderAll();
 }
@@ -741,7 +880,6 @@ function duplicateCurrentSkin() {
   };
   state.selectedSkinId = id;
   state.originalSkinId = '';
-  state.pendingActiveDraft = null;
   state.previewActiveCandidateIndex = 0;
   rememberGlobalLayoutSources();
   renderAll();
@@ -779,7 +917,6 @@ async function importSkinFromFile() {
     state.draftSkin = imported;
     state.selectedSkinId = imported.id;
     state.originalSkinId = '';
-    state.pendingActiveDraft = null;
     state.previewActiveCandidateIndex = 0;
     rememberGlobalLayoutSources();
     rememberOriginalLayout();
@@ -803,7 +940,6 @@ async function deleteCurrentSkin() {
     state.draftSkin = null;
     state.selectedSkinId = '';
     state.originalSkinId = '';
-    state.pendingActiveDraft = null;
     selectSkin(config.activeSkinId || config.skins[0]?.id || '');
     logMessage('已丢弃未保存的皮肤草稿。');
     return;
@@ -835,7 +971,7 @@ async function deleteCurrentSkin() {
     const next = state.configs[platform].activeSkinId || state.configs[platform].skins[0]?.id || '';
     await refreshBackups();
     selectSkin(next);
-    logMessage('已删除并备份。请重新部署 Rime。');
+    await deployAfterWrite('已删除并备份');
   } catch (error) {
     logMessage(`删除失败：${error.message}`);
   }
@@ -847,6 +983,7 @@ function renderAll() {
   renderEditor();
   renderPreview();
   renderBackupList();
+  renderSchemaSettings();
 }
 
 function renderPlatform() {
@@ -856,6 +993,11 @@ function renderPlatform() {
     : state.preferredPlatform === 'weasel' ? '检测到 Windows，默认小狼毫。'
       : '未识别当前 Rime 前端，可手动选择平台。';
   dom.platformHint.textContent = detected;
+  const canDeploy = state.storageMode === 'local' && state.deploySupported;
+  dom.setActiveButton.textContent = canDeploy ? '保存、设为当前并应用' : '保存并设为当前';
+  dom.deployHint.textContent = canDeploy
+    ? '保存和回退后可由本地启动器重新部署 Rime。'
+    : '当前模式不能自动部署，保存后请手动重新部署 Rime。';
 }
 
 function renderSkinList() {
@@ -994,18 +1136,14 @@ function renderEditor() {
   setRange(dom.shadowOffsetY, dom.shadowOffsetYNumber, dom.shadowOffsetYValue, layout.shadowOffsetY);
 
   for (const [role, label] of COLOR_CONTROLS) {
+    if (role === 'hilitedMark' && state.selectedPlatform !== 'weasel') continue;
     const wrapper = document.createElement('label');
     const color = skin.colors?.[role] || DEFAULT_COLORS[role] || DEFAULT_COLORS.back;
     wrapper.className = 'color-control';
-    if (role === 'hilitedMark' && state.selectedPlatform !== 'weasel') {
-      wrapper.classList.add('disabled-control');
-      wrapper.title = '鼠须管不支持小狼毫的 hilited_mark_color 候选标记。';
-    }
     wrapper.innerHTML = `<span>${label}</span>`;
     const input = document.createElement('input');
     input.type = 'color';
     input.value = rgbaToCssHex(color);
-    input.disabled = role === 'hilitedMark' && state.selectedPlatform !== 'weasel';
     input.addEventListener('input', () => updateDraftColor(role, cssHexToRgba(input.value)));
     const alphaRow = document.createElement('div');
     alphaRow.className = 'alpha-row';
@@ -1015,7 +1153,6 @@ function renderEditor() {
     alpha.max = '255';
     alpha.step = '1';
     alpha.value = String(color.a ?? 255);
-    alpha.disabled = role === 'hilitedMark' && state.selectedPlatform !== 'weasel';
     const alphaValue = document.createElement('output');
     alphaValue.value = String(color.a ?? 255);
     alpha.addEventListener('input', () => {
@@ -1115,6 +1252,7 @@ function syncCandidateMarkerControl() {
   if (!dom.candidateMarker) return;
   const isWeasel = state.selectedPlatform === 'weasel';
   dom.candidateMarker.disabled = !isWeasel;
+  dom.candidateMarkerField.hidden = !isWeasel;
   dom.candidateMarker.title = isWeasel
     ? ''
     : '鼠须管不支持小狼毫的 style/mark_text 候选标记。';
@@ -1134,12 +1272,6 @@ function updateDraftId(value) {
   state.draftSkin.id = safe;
   dom.skinId.value = safe;
   state.selectedSkinId = safe;
-  if (state.pendingActiveDraft === state.draftSkin) {
-    state.configs[state.selectedPlatform].activeSkinId = safe;
-    if (state.selectedPlatform === 'squirrel') {
-      state.configs[state.selectedPlatform].darkSkinId = safe;
-    }
-  }
   renderSkinList();
 }
 
@@ -1391,18 +1523,26 @@ function manifestSummary(manifest) {
   return [operation, `${source}${target}`, skin].filter(Boolean).join(' ');
 }
 
-function setActiveSkin() {
+async function setActiveSkin() {
   if (!state.draftSkin) return;
-  state.configs[state.selectedPlatform].activeSkinId = state.draftSkin.id;
-  if (state.selectedPlatform === 'squirrel') {
-    state.configs[state.selectedPlatform].darkSkinId = state.draftSkin.id;
-  }
-  state.pendingActiveDraft = state.draftSkin;
-  logMessage(`已设为当前皮肤。保存后请重新部署 Rime。`);
-  renderSkinList();
+  logMessage('正在保存并切换当前皮肤...');
+  await saveCurrentSkin({ activate: true });
 }
 
-async function saveCurrentSkin() {
+async function deployAfterWrite(successMessage) {
+  if (state.storageMode === 'local' && state.deploySupported) {
+    try {
+      await localApi('deploy', { method: 'POST' });
+      logMessage(`${successMessage}并重新部署 Rime。`);
+    } catch (error) {
+      logMessage(`${successMessage}，但自动部署失败：${error.message}`);
+    }
+  } else {
+    logMessage(`${successMessage}；请手动重新部署 Rime。`);
+  }
+}
+
+async function saveCurrentSkin(options = {}) {
   if (!state.draftSkin || !hasWritableStorage()) return;
   try {
     const platform = state.selectedPlatform;
@@ -1429,7 +1569,7 @@ async function saveCurrentSkin() {
       if (resolution === 'cancel') return;
       if (resolution === 'new') state.draftSkin.id = generateSkinId(state.draftSkin.id, config.skins.map((skin) => skin.id));
     }
-    const userRequestedActive = state.pendingActiveDraft === state.draftSkin;
+    const userRequestedActive = options.activate === true;
     const makeActive = Boolean(
       userRequestedActive ||
         (!state.originalSkinId && !config.activeSkinId) ||
@@ -1461,6 +1601,10 @@ async function saveCurrentSkin() {
       userRequestedActive,
     });
     if (activeOnly) {
+      await backupFiles(`切换${PLATFORM_LABELS[platform]}-${state.draftSkin.id}`, [filename], {
+        operation: 'save', sourcePlatform: platform, targetPlatform: '',
+        skinIdBefore: config.activeSkinId, skinIdAfter: state.draftSkin.id, createdFiles: [],
+      }, { [filename]: current });
       const output = updateActiveSkinConfig(existingText, platform, state.draftSkin.id, {
         makeDark: platform === 'squirrel',
       });
@@ -1471,10 +1615,9 @@ async function saveCurrentSkin() {
       state.rawFiles[platform] = written.text;
       state.configs[platform] = mergeGlobalLayoutIntoConfig(parseConfig(platform, written.text), state.globalLayout);
       state.selectedSkinId = state.draftSkin.id;
-      state.pendingActiveDraft = null;
       selectSkin(state.selectedSkinId);
-      logMessage('已切换当前皮肤。请重新部署 Rime。');
-      return;
+      await deployAfterWrite('已切换当前皮肤');
+      return true;
     }
     const filesToBackup = [filename, ...(globalWrite ? [globalWrite.filename] : [])];
     const backupSnapshots = { [filename]: current };
@@ -1512,18 +1655,21 @@ async function saveCurrentSkin() {
       } else {
         upsertCustomFileState(globalWrite.filename, savedGlobal.text);
       }
-      const global = parseGlobalCustomFiles(globalCustomFilesForParse());
-      state.globalLayout = global.layout;
-      state.globalSources = global.sources;
+      applyCurrentSchemaLayout();
     }
     state.configs[platform] = mergeGlobalLayoutIntoConfig(parseConfig(platform, written.text), state.globalLayout);
     state.selectedSkinId = state.draftSkin.id;
-    state.pendingActiveDraft = null;
     await refreshBackups();
     selectSkin(state.selectedSkinId);
-    logMessage('已保存并备份。请重新部署 Rime。');
+    if (userRequestedActive) {
+      await deployAfterWrite('已保存并设为当前皮肤');
+    } else {
+      await deployAfterWrite('已保存并备份');
+    }
+    return true;
   } catch (error) {
     logMessage(`保存失败：${error.message}`);
+    return false;
   }
 }
 
@@ -1606,7 +1752,7 @@ async function prepareGlobalLayoutWrite(skin) {
 
   const filename = skin.globalSources?.alternativeSelectLabels ||
     state.globalSources.alternativeSelectLabels ||
-    'default.custom.yaml';
+    (state.currentSchemaId ? `${state.currentSchemaId}.custom.yaml` : 'default.custom.yaml');
   const current = await readOptionalFileEntry(filename);
   const output = updateGlobalCustomConfig(current.exists ? current.text : 'patch:\n', {
     alternativeSelectLabels: currentLabels,
@@ -1778,7 +1924,7 @@ async function rollbackBackup(backup) {
     await loadConfigs();
     chooseInitialPlatform();
     await refreshBackups();
-    logMessage('已回退到所选备份。请重新部署 Rime。');
+    await deployAfterWrite('已回退到所选备份');
   } catch (error) {
     logMessage(`回退失败：${error.message}`);
   }
@@ -1989,6 +2135,8 @@ function currentFrontendFiles() {
   for (const [platform, filename] of Object.entries(PLATFORM_FILES)) {
     if (state.fileExists[platform]) files.add(filename);
   }
+  if (state.fileExists.default) files.add('default.custom.yaml');
+  for (const filename of state.customFiles.map((file) => file.name)) files.add(filename);
   return files;
 }
 
@@ -2093,10 +2241,13 @@ function colorsForPreview(skinColors = {}) {
 
 function createCandidateNode(item, layout, colors, index) {
   const active = index === state.previewActiveCandidateIndex;
+  const previewComment = typeof resolvePreviewComment === 'function'
+    ? resolvePreviewComment(item.comment, { quickCodeIndicator: currentSchemaSettingValue('quickCodeIndicator') })
+    : item.comment;
   const candidate = document.createElement('span');
   const classes = ['candidate'];
   if (active) classes.push('active');
-  if (!item.comment) classes.push('no-comment');
+  if (!previewComment) classes.push('no-comment');
   if (String(item.text || '').length > 6) classes.push('long');
   candidate.className = classes.join(' ');
   const textMarker = String(layout.markText || '');
@@ -2187,7 +2338,7 @@ function createCandidateNode(item, layout, colors, index) {
 
   const comment = document.createElement('span');
   comment.className = 'candidate-comment';
-  comment.textContent = item.comment;
+  comment.textContent = previewComment;
   comment.style.color = rgbaToCss(active
     ? colorRole(colors, 'hilitedCommentText', 'hilitedCandidateText', 'hilitedText')
     : colorRole(colors, 'commentText'));
@@ -2255,7 +2406,7 @@ function preeditTextForLayout(layout) {
 
 function labelForCandidate(item, layout, index) {
   const labels = normalizeLabelList(layout.alternativeSelectLabels);
-  return labels[index] || item.label;
+  return labels[index] || item.label || String(index + 1);
 }
 
 function formatCandidateLabel(label, layout) {
