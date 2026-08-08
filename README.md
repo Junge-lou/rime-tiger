@@ -28,12 +28,14 @@ contents，并确保 `main` 的分支保护允许该工作流推送。
 
 ## 用户词管理
 
-`tiger` 和 `tigress` 都支持加词、减词和候选调序，操作只影响当前方案。新增内容分别保存：
+`tiger` 和 `tigress` 都支持加词、减词和候选调序，操作只影响当前方案。两个方案继续加载各自的手工用户词典：
 
 - `tiger.user.dict.yaml`
 - `tigress.user.dict.yaml`
 
-两个方案都会导入自己的用户层，因此功能一致但新增内容不会互相串用。已经通过旧版 `tigress_user_words.lua` 添加或屏蔽的词，会迁移到 `tigress.user.dict.yaml` 并继续生效。
+两个方案都会导入自己的用户层，因此功能一致但新增内容不会互相串用。首次启用新版逻辑时，已有用户词典和旧版禁用标记会迁移到 Rime 用户数据库；之后的加词、减词、调序只写入用户数据库，不再改写官方码表。更新仓库或覆盖官方码表后，用户操作仍会继续生效。
+
+用户数据分两处保存：手工维护的词条仍在上述 `*.user.dict.yaml` 文件中；通过快捷键产生的加词、减词和调序记录，分别存入名为 `tiger_user_words_tiger`、`tiger_user_words_tigress` 的 LevelDB 数据库。数据库由 Rime 管理并放在用户数据目录中，常见位置是 macOS 的 `~/Library/Rime`、Windows 的 `%APPDATA%\Rime`；Linux 的位置随前端而异，例如 Fcitx5 通常使用 `~/.local/share/fcitx5/rime`。实际数据库文件名可能因 Rime 版本和前端不同而带有不同后缀，不建议直接编辑；备份时直接备份整个 Rime 用户数据目录即可。
 
 ## 顿号与符号菜单
 
@@ -75,7 +77,7 @@ contents，并确保 `main` 的分支保护允许该工作流推送。
 - `Ctrl+Home` 或 `Ctrl+Option+Home`：当前高亮候选移到当前页第一位。
 - `Ctrl+End` 或 `Ctrl+Option+End`：当前高亮候选移到当前页最后一位。
 
-`tiger` 的加词和调序写入 `tiger.user.dict.yaml`，`tigress` 写入 `tigress.user.dict.yaml`。减词会在当前方案匹配到的词典条目前写入禁用标记并注释原条目，同时在对应用户词库记录操作历史。
+`tiger` 和 `tigress` 的加词、减词、调序状态写入各自独立的 Rime 用户数据库，不会修改当前方案的官方码表。首次迁移后，`tiger.user.dict.yaml` / `tigress.user.dict.yaml` 仍可作为手工用户词典使用；通过快捷键产生的记录不再依赖这两个文件。
 
 双反斜杠入口只识别“正常编码末尾的两个反斜杠”。以反斜杠开头的 `\\djs`、`\\tj` 等命令仍交给原命令组件处理，不会被当作加词或发生转义。
 

@@ -3,8 +3,6 @@ __pycache__/
 .DS_Store
 
 # Development-only files
-tests/*
-!tests/input_speed_stat_test.lua
 Rime皮肤编辑器/tests/
 docs/
 tools/

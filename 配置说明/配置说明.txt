@@ -120,6 +120,16 @@ custom 关系：
 - 只想词库改一个特殊按键：改 tigress.custom.yaml。
 - 想改方案在切换菜单里的名字：改对应的 *.schema.yaml。
 
+次选键跳过表情和符号联想：
+- 默认开启。普通输入时，分号 ; 选择第 2 个文字候选，单引号 ' 选择第 3 个文字候选，
+  中间的 emoji 和符号联想不占用这两个次选键。
+- 反斜杠符号菜单（如 \\bq）和分号引导输入仍按候选位置选重，不受智能次选影响。
+- 如需恢复原来的位置选重，在 tiger_base.custom.yaml 的 patch 下加入：
+
+  smart_candidate_selection/enabled: false  # ; 选第 2 项，' 选第 3 项
+
+  这是静态配置，修改后需要重新部署 Rime 才会生效。
+
 
 六、常用字和全字集怎么来的
 --------------------------
@@ -154,9 +164,27 @@ custom 关系：
 两种加词入口同时保留；Ctrl+; 被系统或应用占用时，可使用双反斜杠入口。
 以反斜杠开头的 \\djs、\\tj 等命令不匹配加词后缀，会继续按原命令处理。
 
-用户词和调序记录按方案分开保存：
+两个方案继续加载各自的手工用户词典：
 - tiger -> tiger.user.dict.yaml
 - tigress -> tigress.user.dict.yaml
+
+快捷键产生的加词、减词、调序记录现在保存在 Rime 用户数据库中，不再改写官方
+码表。首次加载新版 Lua 时，会把已有的用户词典内容和旧版禁用标记迁移进去；之后
+更新官方码表不会覆盖这些操作记录。
+
+用户数据位置：
+- 手工维护的词条：tiger.user.dict.yaml / tigress.user.dict.yaml
+- tiger 快捷键操作：LevelDB 数据库 tiger_user_words_tiger
+- tigress 快捷键操作：LevelDB 数据库 tiger_user_words_tigress
+
+这些文件和数据库都在 Rime 用户数据目录中。常见位置：
+- macOS 鼠须管：~/Library/Rime
+- Windows 小狼毫：%APPDATA%\Rime
+- Linux Fcitx5：~/.local/share/fcitx5/rime（其他前端可能不同）
+
+LevelDB 的实际文件名或后缀可能随 Rime 版本和前端不同，请勿直接编辑。需要备份时，
+直接备份整个 Rime 用户数据目录即可。首次升级并重新部署前，请先保留原来的两个
+*.user.dict.yaml，以便新版逻辑完成一次迁移。
 
 
 八、不要动这些

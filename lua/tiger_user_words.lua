@@ -22,7 +22,6 @@ local GENERATED_END = "# " .. USER_WORDS_MARKER .. " generated-end"
 local PROFILES = {
     tiger = {
         schema_id = "tiger",
-        dictionary_name = "tiger.user",
         extended_dict = "tiger.user.dict.yaml",
         legacy_migration_sources = {},
         source_dicts = {
@@ -37,12 +36,12 @@ local PROFILES = {
             "tiger.common.dict.yaml",
             "tiger.dict.yaml",
         },
+        db_name = "tiger_user_words_tiger",
         weight_base = 100000000000,
         weight_step = 1000,
     },
     tigress = {
         schema_id = "tigress",
-        dictionary_name = "tigress.user",
         extended_dict = "tigress.user.dict.yaml",
         legacy_migration_sources = {
             "tigress.extended.dict.yaml",
@@ -61,10 +60,169 @@ local PROFILES = {
             "tigress.user.dict.yaml",
             "tigress.extended.dict.yaml",
         },
+        db_name = "tiger_user_words_tigress",
         weight_base = 100000000000,
         weight_step = 1000,
     },
 }
+
+local DB_SEPARATOR = " \t"
+local DB_META_KEY = "__tiger_user_words_meta__"
+local DB_VERSION = 1
+local db_pools = {}
+
+local function parse_db_record(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    local fields = {}
+    for key, field_value in value:gmatch("(%a+)=([%-]?%d+)") do
+        fields[key] = tonumber(field_value)
+    end
+    if fields.v ~= DB_VERSION then
+        return nil
+    end
+    return {
+        added = fields.a == 1,
+        hidden = fields.h == 1,
+        weight = fields.w,
+        updated_at = fields.t or 0,
+    }
+end
+
+local function encode_db_record(record)
+    return string.format(
+        "v=%d a=%d h=%d w=%d t=%d",
+        DB_VERSION,
+        record.added and 1 or 0,
+        record.hidden and 1 or 0,
+        record.weight or 0,
+        record.updated_at or 0
+    )
+end
+
+local function copy_db_record(record)
+    if not record then
+        return { added = false, hidden = false, weight = nil, updated_at = 0 }
+    end
+    return {
+        added = record.added,
+        hidden = record.hidden,
+        weight = record.weight,
+        updated_at = record.updated_at,
+    }
+end
+
+local Store = {}
+Store.__index = Store
+
+local function acquire_db(name)
+    if type(LevelDb) ~= "function" then
+        return nil
+    end
+    local pool = db_pools[name]
+    if pool then
+        return setmetatable({ pool = pool }, Store)
+    end
+    local ok, db = pcall(LevelDb, name)
+    if not ok or not db then
+        return nil
+    end
+    local opened = pcall(function()
+        if not db:loaded() then
+            db:open()
+        end
+    end)
+    local loaded_ok, loaded = pcall(function()
+        return db:loaded()
+    end)
+    if not opened or not loaded_ok or not loaded then
+        pcall(function()
+            if db:loaded() then
+                db:close()
+            end
+        end)
+        return nil
+    end
+    pool = { db = db }
+    db_pools[name] = pool
+    return setmetatable({ pool = pool }, Store)
+end
+
+function Store:query(code)
+    local records = {}
+    local prefix = code .. DB_SEPARATOR
+    local ok = pcall(function()
+        local accessor = self.pool.db:query(prefix)
+        if not accessor then
+            return
+        end
+        for key, value in accessor:iter() do
+            local record = parse_db_record(value)
+            if record and key:sub(1, #prefix) == prefix then
+                records[key:sub(1 + #prefix)] = record
+            end
+        end
+    end)
+    return ok and records or nil
+end
+
+function Store:list_all()
+    local records = {}
+    local ok = pcall(function()
+        local accessor = self.pool.db:query("")
+        if not accessor then
+            return
+        end
+        for key, value in accessor:iter() do
+            local split = key:find(DB_SEPARATOR, 1, true)
+            local record = parse_db_record(value)
+            if split and record then
+                local code = key:sub(1, split - 1)
+                if code ~= DB_META_KEY then
+                    table.insert(records, {
+                        code = code,
+                        text = key:sub(split + #DB_SEPARATOR),
+                        record = record,
+                    })
+                end
+            end
+        end
+    end)
+    return ok and records or nil
+end
+
+function Store:write(code, text, record)
+    local ok, result = pcall(function()
+        return self.pool.db:update(code .. DB_SEPARATOR .. text, encode_db_record(record))
+    end)
+    return ok and result ~= false
+end
+
+function Store:is_migrated()
+    local ok, found = pcall(function()
+        local accessor = self.pool.db:query(DB_META_KEY .. DB_SEPARATOR)
+        if not accessor then
+            return false
+        end
+        for key, value in accessor:iter() do
+            if key == DB_META_KEY .. DB_SEPARATOR .. "version" then
+                return parse_db_record(value) ~= nil
+            end
+        end
+        return false
+    end)
+    return ok and found or false
+end
+
+function Store:mark_migrated()
+    return self:write(DB_META_KEY, "version", {
+        added = false,
+        hidden = false,
+        weight = DB_VERSION,
+        updated_at = os.time(),
+    })
+end
 
 local shared_states = {}
 
@@ -119,25 +277,6 @@ local function read_lines(filename)
     end
     f:close()
     return lines
-end
-
-local function write_lines(filename, lines)
-    local path = data_path(filename)
-    local f, err = io.open(path, "w")
-    if not f then
-        log.error("tiger_user_words: failed to write " .. path .. ": " .. tostring(err))
-        return false
-    end
-    for _, line in ipairs(lines) do
-        f:write(line)
-        f:write("\n")
-    end
-    f:close()
-    return true
-end
-
-local function now_stamp()
-    return os.date("%Y-%m-%d %H:%M:%S")
 end
 
 local function ensure_code(state, code)
@@ -224,141 +363,81 @@ local function parse_marker(line)
     return nil
 end
 
-local function contains_body_marker(lines)
-    for _, line in ipairs(lines) do
-        if line == "..." then
-            return true
+local function migrate_to_db(profile, store)
+    if not store or store:is_migrated() then
+        return
+    end
+
+    local function current_record(code, text)
+        local records = store:query(code)
+        return records and records[text] or nil
+    end
+
+    local function write_record(code, text, changes)
+        local record = copy_db_record(current_record(code, text))
+        for key, value in pairs(changes) do
+            record[key] = value
         end
-    end
-    return false
-end
-
-local function default_user_dict_lines(profile)
-    return {
-        "# Rime dictionary: " .. profile.dictionary_name,
-        "# encoding: utf-8",
-        "",
-        "---",
-        "name: " .. profile.dictionary_name,
-        'version: "2026.06.22"',
-        "sort: by_weight",
-        "use_preset_vocabulary: false",
-        "columns:",
-        "  - text",
-        "  - code",
-        "  - weight",
-        "  - stem",
-        "encoder:",
-        "  rules:",
-        "    - length_equal: 2",
-        '      formula: "AaAbBaBb"',
-        "    - length_equal: 3",
-        '      formula: "AaBaCaCb"',
-        "    - length_in_range: [4, 99]",
-        '      formula: "AaBaCaZa"',
-        "...",
-        "",
-        "# User entries managed for the " .. profile.schema_id .. " schema.",
-    }
-end
-
-local function has_legacy_migration_marker(lines)
-    for _, line in ipairs(lines) do
-        if line:find(USER_WORDS_MARKER .. "\tlegacy-migrated", 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function collect_legacy_user_entries(profile, existing_lines)
-    local existing = {}
-    for _, line in ipairs(existing_lines) do
-        existing[line] = true
+        store:write(code, text, record)
     end
 
-    local rows = {}
-    for _, filename in ipairs(profile.legacy_migration_sources) do
+    for _, filename in ipairs(profile.source_dicts) do
         local in_body = false
         for _, line in ipairs(read_lines(filename)) do
-            if not in_body then
-                if line == "..." then
-                    in_body = true
-                end
-            else
+            if line == "..." then
+                in_body = true
+            elseif in_body then
                 local marker = parse_marker(line)
-                if marker then
-                    if not existing[line] then
-                        table.insert(rows, line)
-                        existing[line] = true
-                    end
-                else
+                if marker and (marker.op == "disabled" or marker.op == "enabled") then
+                    write_record(marker.code, marker.text, {
+                        added = marker.op == "enabled",
+                        hidden = marker.op == "disabled",
+                        weight = tonumber(marker.value) or profile.weight_base,
+                        updated_at = os.time(),
+                    })
+                elseif is_user_layer_dict(profile, filename) then
                     local entry = parse_entry(profile, filename, line)
-                    if entry then
-                        local added_raw = false
-                        if not existing[line] then
-                            table.insert(rows, line)
-                            existing[line] = true
-                            added_raw = true
-                        end
-                        if added_raw and entry.code and entry.code ~= "" then
-                            local marker_line = "# " .. USER_WORDS_MARKER .. "\tenabled\t" .. entry.code .. "\t" .. entry.text .. "\t" .. tostring(entry.weight or profile.weight_base)
-                            if not existing[marker_line] then
-                                table.insert(rows, marker_line)
-                                existing[marker_line] = true
-                            end
-                        end
+                    if entry and entry.code then
+                        write_record(entry.code, entry.text, {
+                            added = true,
+                            weight = entry.weight or profile.weight_base,
+                            updated_at = os.time(),
+                        })
                     end
                 end
             end
         end
     end
-    return rows
-end
-
-local function append_legacy_user_entries(lines, entries)
-    if #entries == 0 then
-        return false
-    end
-    table.insert(lines, "")
-    table.insert(lines, "# " .. USER_WORDS_MARKER .. "\tlegacy-migrated\t" .. now_stamp())
-    for _, line in ipairs(entries) do
-        table.insert(lines, line)
-    end
-    return true
-end
-
-local function ensure_user_dict(profile)
-    local lines = read_lines(profile.extended_dict)
-    local changed = false
-
-    if #lines == 0 or not contains_body_marker(lines) then
-        lines = default_user_dict_lines(profile)
-        changed = true
-    end
-
-    if not has_legacy_migration_marker(lines) then
-        local entries = collect_legacy_user_entries(profile, lines)
-        if append_legacy_user_entries(lines, entries) then
-            changed = true
-        end
-    end
-
-    if changed then
-        write_lines(profile.extended_dict, lines)
-    end
+    store:mark_migrated()
 end
 
 local function load_state(profile)
-    ensure_user_dict(profile)
+    local store = acquire_db(profile.db_name)
+    migrate_to_db(profile, store)
 
     local state = {
         config = profile,
+        store = store,
         added = {},
         blocked = {},
         weights = {},
         generated_loaded = false,
     }
+
+    if store then
+        for _, item in ipairs(store:list_all() or {}) do
+            if item.record.added then
+                set_added(state, item.code, item.text, item.record.weight or profile.weight_base)
+            end
+            if item.record.weight and item.record.weight ~= 0 then
+                ensure_code(state, item.code)
+                state.weights[item.code][item.text] = item.record.weight
+            end
+            if item.record.hidden then
+                set_blocked(state, item.code, item.text)
+            end
+        end
+    end
 
     for _, filename in ipairs(profile.source_dicts) do
         local in_generated = false
@@ -408,116 +487,42 @@ local function profile_for_env(env)
     return profile
 end
 
-local function sorted_generated_entries(state)
-    local rows = {}
-    for code, texts in pairs(state.weights) do
-        for text, weight in pairs(texts) do
-            if not (state.blocked[code] and state.blocked[code][text]) then
-                table.insert(rows, {
-                    code = code,
-                    text = text,
-                    weight = weight or state.config.weight_base,
-                })
-            end
-        end
-    end
-    table.sort(rows, function(a, b)
-        if a.code ~= b.code then
-            return a.code < b.code
-        end
-        return a.text < b.text
-    end)
-    return rows
-end
-
-local function rewrite_generated_section(state)
-    local filename = state.config.extended_dict
-    local lines = read_lines(filename)
-    local out = {}
-    local in_generated = false
-    local found = false
-
-    for _, line in ipairs(lines) do
-        if line == GENERATED_START then
-            found = true
-            in_generated = true
-            table.insert(out, line)
-            for _, row in ipairs(sorted_generated_entries(state)) do
-                table.insert(out, row.text .. "\t" .. row.code .. "\t" .. tostring(row.weight))
-            end
-        elseif line == GENERATED_END then
-            in_generated = false
-            table.insert(out, line)
-        elseif not in_generated then
-            table.insert(out, line)
-        end
-    end
-
-    if not found then
-        table.insert(out, "")
-        table.insert(out, "#----------用户快捷管理（自动生成）----------#")
-        table.insert(out, GENERATED_START)
-        for _, row in ipairs(sorted_generated_entries(state)) do
-            table.insert(out, row.text .. "\t" .. row.code .. "\t" .. tostring(row.weight))
-        end
-        table.insert(out, GENERATED_END)
-    end
-
-    return write_lines(filename, out)
-end
-
-local function disable_in_file(state, filename, code, text)
-    local lines = read_lines(filename)
-    local out = {}
-    local changed = false
-
-    for _, line in ipairs(lines) do
-        local entry = parse_entry(state.config, filename, line)
-        if entry and entry.text == text and (entry.code == code or (is_user_layer_dict(state.config, filename) and entry.code == nil)) then
-            table.insert(out, "# " .. USER_WORDS_MARKER .. "\tdisabled\t" .. code .. "\t" .. text .. "\t" .. now_stamp())
-            table.insert(out, "# " .. line)
-            changed = true
-        else
-            table.insert(out, line)
-        end
-    end
-
-    if changed then
-        write_lines(filename, out)
-    end
-    return changed
-end
-
-local function append_disable_marker(state, code, text)
-    local lines = read_lines(state.config.extended_dict)
-    table.insert(lines, "")
-    table.insert(lines, "# " .. USER_WORDS_MARKER .. "\tdisabled\t" .. code .. "\t" .. text .. "\t" .. now_stamp())
-    write_lines(state.config.extended_dict, lines)
-end
-
-local function append_enable_marker(state, code, text, weight)
-    local lines = read_lines(state.config.extended_dict)
-    table.insert(lines, "")
-    table.insert(lines, "# " .. USER_WORDS_MARKER .. "\tenabled\t" .. code .. "\t" .. text .. "\t" .. tostring(weight or state.config.weight_base) .. "\t" .. now_stamp())
-    write_lines(state.config.extended_dict, lines)
-end
-
 local function persist_disable(state, code, text)
-    set_blocked(state, code, text)
-    local changed = false
-    for _, filename in ipairs(state.config.source_dicts) do
-        if disable_in_file(state, filename, code, text) then
-            changed = true
-        end
+    if not state.store then
+        return false
     end
-    rewrite_generated_section(state)
-    append_disable_marker(state, code, text)
+    local records = state.store:query(code)
+    if not records then
+        return false
+    end
+    local record = copy_db_record(records[text])
+    record.hidden = true
+    record.updated_at = os.time()
+    if not state.store:write(code, text, record) then
+        return false
+    end
+    set_blocked(state, code, text)
+    return true
 end
 
 local function persist_weight(state, code, text, weight)
+    if not state.store then
+        return false
+    end
+    local records = state.store:query(code)
+    if not records then
+        return false
+    end
+    local record = copy_db_record(records[text])
+    record.added = true
+    record.hidden = false
+    record.weight = weight
+    record.updated_at = os.time()
+    if not state.store:write(code, text, record) then
+        return false
+    end
     set_added(state, code, text, weight)
-    rewrite_generated_section(state)
-    append_enable_marker(state, code, text, weight)
+    return true
 end
 
 local function current_segment(env)
@@ -648,10 +653,14 @@ local function finish_capture(env)
     end
     local code = env.capture.code
     local text = env.capture.text
+    local saved
     if env.capture.operation == "disable" then
-        persist_disable(env.state, code, text)
+        saved = persist_disable(env.state, code, text)
     else
-        persist_weight(env.state, code, text, env.state.config.weight_base)
+        saved = persist_weight(env.state, code, text, env.state.config.weight_base)
+    end
+    if not saved then
+        return false
     end
     clear_capture(env)
     local ctx = env.engine.context
@@ -759,15 +768,28 @@ end
 
 local function apply_visible_order(env, items, code)
     local profile = env.state.config
+    local user_added = env.state.added[code] or {}
+    if not env.state.store then
+        return false
+    end
+    local records = env.state.store:query(code)
+    if not records then
+        return false
+    end
     for i, item in ipairs(items) do
         local weight = profile.weight_base - (i - 1) * profile.weight_step
-        set_added(env.state, code, item.text, weight)
+        local record = copy_db_record(records[item.text])
+        record.added = user_added[item.text] == true
+        record.hidden = false
+        record.weight = weight
+        record.updated_at = os.time()
+        if not env.state.store:write(code, item.text, record) then
+            return false
+        end
+        env.state.weights[code] = env.state.weights[code] or {}
+        env.state.weights[code][item.text] = weight
     end
-    rewrite_generated_section(env.state)
-    for i, item in ipairs(items) do
-        local weight = profile.weight_base - (i - 1) * profile.weight_step
-        append_enable_marker(env.state, code, item.text, weight)
-    end
+    return true
 end
 
 local function select_moved_candidate(env, moved, fallback_index)
@@ -826,7 +848,9 @@ local function move_selected(env, direction)
 
     local moved = table.remove(items, rel)
     table.insert(items, target, moved)
-    apply_visible_order(env, items, code)
+    if not apply_visible_order(env, items, code) then
+        return false
+    end
     env.engine.context:refresh_non_confirmed_composition()
     select_moved_candidate(env, moved, items[target].index)
     return true
@@ -839,7 +863,9 @@ local function disable_selected(env)
     if code == "" or text == "" then
         return false
     end
-    persist_disable(env.state, code, text)
+    if not persist_disable(env.state, code, text) then
+        return false
+    end
     env.engine.context:refresh_non_confirmed_composition()
     return true
 end

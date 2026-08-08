@@ -16,6 +16,7 @@ patch:
   #translator/enable_completion: true # 编码提示，默认关闭，删掉行首的#号，即可开启
   #speller/auto_select_pattern: ^;\w+|^\w{4}$  # 四码上屏功能，删掉行首的#号，即可开启
   #speller/alphabet: "['zyxwvutsrqponmlkjihgfedcba]" # 取消分号引导的快符功能（分号不作码元），删掉行首#号即可生效
+  #smart_candidate_selection/enabled: false # 关闭智能次选，恢复按候选位置选重：; 选第 2 项，' 选第 3 项
   #style/mark_text: " " #编号前标志，这里是空格，可在引号里可以自己加东西替换，如 "😅"
   #style/layout/border_width: 2 #边框宽度，默认是0
   #style/layout/border_height: 2 #边框高度，默认是0

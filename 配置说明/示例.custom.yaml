@@ -44,7 +44,8 @@ patch:
   translator/enable_sentence: false  # 连打造句；形码一般关闭
   translator/enable_user_dict: false  # Rime 动态用户词典关闭；本配置由共享 Lua 管理独立用户词典
   # tiger / tigress 都支持 Ctrl+; 或 编码 + \\ + Space 进入加词。
-  # 新增内容分开保存：tiger.user.dict.yaml / tigress.user.dict.yaml。
+  # 快捷键产生的加词、减词、调序记录按方案分开保存在 Rime 用户数据库。
+  # 手工用户词典仍分别是 tiger.user.dict.yaml / tigress.user.dict.yaml。
   translator/enable_encoder: false  # 自动造词编码
   translator/encode_commit_history: false  # 根据上屏历史造词
   speller/auto_select: true  # 允许自动上屏
@@ -87,6 +88,7 @@ patch:
 
   # 六、空格和常用快捷键
   # --------------------
+  smart_candidate_selection/enabled: true # true 跳过 emoji/符号联想；false 恢复按第 2、3 项选重
   # key_binder/bindings 是列表，写了这里会替换整组按键。
   key_binder/bindings:
     - { accept: space, send: space, when: has_menu }  # 有候选时空格上屏首选

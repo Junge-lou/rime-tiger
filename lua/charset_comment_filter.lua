@@ -326,6 +326,47 @@ local charset = {
    ["[私用区补充B]"] = { first = 0x100000, last = 0x10ffff },
    ["[Compat]"] = { first = 0x2F8000, last = 0x2FA1FF } }
 
+local charset_ranges = {}
+for name, range in pairs(charset) do
+  charset_ranges[#charset_ranges + 1] = {
+    name = name,
+    first = range.first,
+    last = range.last,
+  }
+end
+table.sort(charset_ranges, function(a, b)
+  return a.first < b.first
+end)
+
+local function charset_range(code)
+  local low = 1
+  local high = #charset_ranges
+  while low <= high do
+    local middle = math.floor((low + high) / 2)
+    local range = charset_ranges[middle]
+    if code < range.first then
+      high = middle - 1
+    elseif code > range.last then
+      low = middle + 1
+    else
+      return range
+    end
+  end
+  return nil
+end
+
+local function charset_name(text)
+  local found
+  for position in utf8.codes(text) do
+    local range = charset_range(utf8.codepoint(text, position))
+    if not range or (found and found ~= range.name) then
+      return nil
+    end
+    found = range.name
+  end
+  return found
+end
+
 local function exists(single_filter, text)
   for i in utf8.codes(text) do
      local c = utf8.codepoint(text, i)
@@ -514,12 +555,10 @@ local function charset_comment_filter(input,env)
   local b = env.engine.context:get_option("charset_comment_filter")--开关状态
   for cand in input:iter() do
     if b then
-     for s, r in pairs(charset) do
-       if (exists(is_charset(s), cand.text)) then
-         cand:get_genuine().comment = cand.comment .. " " .. s
-         break
-       end--if
-      end--for
+      local name = charset_name(cand.text)
+      if name then
+        cand:get_genuine().comment = cand.comment .. " " .. name
+      end
      end--if
       yield(cand)
    end

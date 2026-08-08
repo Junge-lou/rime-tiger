@@ -102,6 +102,24 @@ local function test_base_schema_has_filter_switch_and_binding()
   assert_contains(text, "toggle: extended_char", "base binds extended_char toggle")
 end
 
+local function test_smart_candidate_selection_configuration()
+  local base = read("tiger_base.schema.yaml")
+  local custom = read("tiger_base.custom.yaml")
+  local example = read("配置说明/示例.custom.yaml")
+  local guide = read("配置说明/配置说明.txt")
+
+  assert_contains(base, "smart_candidate_selection:", "base defines smart candidate selection")
+  assert_contains(base, "enabled: true", "smart candidate selection defaults to enabled")
+  assert_contains(base, "次选键跳过", "base setting has a Chinese behavior comment")
+  assert_contains(custom, "smart_candidate_selection/enabled: false", "base custom exposes the disable override")
+  assert_contains(custom, "恢复按候选位置选重", "disable override has a Chinese behavior comment")
+  assert_contains(example, "smart_candidate_selection/enabled: true", "custom example documents the setting")
+  assert_contains(example, "跳过 emoji/符号联想", "custom example explains enabled behavior")
+  assert_contains(guide, "smart_candidate_selection/enabled: false", "guide documents how to disable smart selection")
+  assert_contains(guide, "反斜杠符号菜单", "guide preserves explicit symbol menus")
+  assert_contains(guide, "重新部署", "guide states how static setting changes take effect")
+end
+
 local function test_shared_user_word_management_order()
   local base = read("tiger_base.schema.yaml")
   assert_contains(base, "lua_processor@*tiger_user_words*processor", "base includes shared user-word processor")
@@ -149,6 +167,7 @@ local tests = {
   test_schema_dictionaries_use_merged_sources,
   test_extended_dictionaries_import_full_tables,
   test_base_schema_has_filter_switch_and_binding,
+  test_smart_candidate_selection_configuration,
   test_shared_user_word_management_order,
   test_user_word_management_documentation,
 }

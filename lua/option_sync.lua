@@ -5,6 +5,14 @@ local option_state = require("option_state")
 local M = {}
 local kNoop = 2
 local syncing = false
+local SYNC_INTERVAL_MS = 250
+
+local function now_ms()
+  if rime_api and rime_api.get_time_ms then
+    return rime_api.get_time_ms()
+  end
+  return math.floor(os.clock() * 1000)
+end
 
 local COMMON_OPTIONS = {
   "ascii_punct",
@@ -72,6 +80,7 @@ function M.init(env)
       end
     end)
   end
+  env.option_sync_last_ms = now_ms()
   sync_options(env, true)
 end
 
@@ -85,7 +94,14 @@ function M.func(key_event, env)
   if key_event and key_event.release and key_event:release() then
     return kNoop
   end
-  sync_options(env, false)
+  local current_ms = now_ms()
+  local last_ms = env and env.option_sync_last_ms
+  if not last_ms or current_ms < last_ms or current_ms - last_ms >= SYNC_INTERVAL_MS then
+    sync_options(env, false)
+    if env then
+      env.option_sync_last_ms = current_ms
+    end
+  end
   return kNoop
 end
 

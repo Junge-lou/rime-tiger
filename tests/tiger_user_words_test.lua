@@ -45,6 +45,46 @@ end
 
 write_file(temp_dir .. "/tiger.dict.yaml", "TigerSource\ttsrc\t100\n")
 write_file(temp_dir .. "/tigress.dict.yaml", "TigressSource\t100\tqwer\n")
+write_file(temp_dir .. "/tiger.user.dict.yaml", "# Rime dictionary: tiger.user\n---\nname: tiger.user\n...\nLegacyTiger\tlgcy\t42\n")
+write_file(temp_dir .. "/tigress.user.dict.yaml", "# Rime dictionary: tigress.user\n---\nname: tigress.user\n...\nLegacyTigress\tlgcy\t43\n")
+
+local databases = {}
+local function db_accessor(data, prefix)
+  local keys = {}
+  for key, _ in pairs(data) do
+    if key:sub(1, #prefix) == prefix then
+      table.insert(keys, key)
+    end
+  end
+  table.sort(keys)
+  return {
+    iter = function()
+      local index = 0
+      return function()
+        index = index + 1
+        local key = keys[index]
+        return key, key and data[key] or nil
+      end
+    end,
+  }
+end
+
+LevelDb = function(name)
+  local data = databases[name] or {}
+  databases[name] = data
+  return {
+    loaded = function() return true end,
+    open = function() end,
+    close = function() end,
+    update = function(_, key, value)
+      data[key] = value
+      return true
+    end,
+    query = function(_, prefix)
+      return db_accessor(data, prefix or "")
+    end,
+  }
+end
 
 local function notifier()
   return {
@@ -213,7 +253,7 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   assert(words.processor.func(plain_key(0xff0d), add_env) == 1)
   assert(add_env.capture == nil)
   local user_dict = read_file(temp_dir .. "/" .. schema_id .. ".user.dict.yaml")
-  assert(user_dict:find(added_text .. "\tefgh\t", 1, true))
+  assert(not user_dict:find(added_text .. "\tefgh\t", 1, true))
 
   local disable_code = schema_id == "tiger" and "tsrc" or "qwer"
   local disable_text = schema_id == "tiger" and "TigerSource" or "TigressSource"
@@ -226,13 +266,14 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   assert(words.processor.func(plain_key(0xff0d), disable_env) == 1)
   assert(disable_env.state.blocked[disable_code][disable_text])
   local source_dict = read_file(temp_dir .. "/" .. schema_id .. ".dict.yaml")
-  assert(source_dict:find("# " .. disable_text, 1, true))
+  assert(not source_dict:find("# " .. disable_text, 1, true))
 
   local reorder_env = new_runtime_env(schema_id, "mnop", { "第一", "第二" }, 1)
   words.processor.init(reorder_env)
   assert(words.processor.func(ctrl_key(0xff52), reorder_env) == 1)
   assert(reorder_env.state.weights.mnop["第二"] == reorder_env.state.config.weight_base)
   assert(reorder_env.state.weights.mnop["第一"] == reorder_env.state.config.weight_base - reorder_env.state.config.weight_step)
+  assert(not (reorder_env.state.added.mnop and reorder_env.state.added.mnop["第一"]))
 
   local status_env = new_runtime_env(schema_id, "qrst\\\\", {})
   words.processor.init(status_env)
@@ -249,10 +290,23 @@ end
 
 local tiger_user = read_file(temp_dir .. "/tiger.user.dict.yaml")
 local tigress_user = read_file(temp_dir .. "/tigress.user.dict.yaml")
-assert(tiger_user:find("TigerAdded", 1, true))
-assert(not tiger_user:find("TigressAdded", 1, true))
-assert(tigress_user:find("TigressAdded", 1, true))
+assert(not tiger_user:find("TigerAdded", 1, true))
+assert(not tigress_user:find("TigressAdded", 1, true))
 assert(not tigress_user:find("TigerAdded", 1, true))
+assert(databases["tiger_user_words_tiger"]["efgh \tTigerAdded"])
+assert(databases["tiger_user_words_tigress"]["efgh \tTigressAdded"])
+assert(databases["tiger_user_words_tiger"]["lgcy \tLegacyTiger"])
+assert(databases["tiger_user_words_tigress"]["lgcy \tLegacyTigress"])
+
+package.loaded["tiger_user_words"] = nil
+package.loaded["tigress_user_words"] = nil
+local reloaded_words = require("tiger_user_words")
+local reloaded_env = new_runtime_env("tiger", "mnop", { "第一", "第二" })
+reloaded_words.processor.init(reloaded_env)
+assert(reloaded_env.state.added.efgh.TigerAdded)
+assert(reloaded_env.state.blocked.tsrc.TigerSource)
+assert(reloaded_env.state.weights.mnop["第二"] == reloaded_env.state.config.weight_base)
+assert(reloaded_env.state.weights.mnop["第一"] == reloaded_env.state.config.weight_base - reloaded_env.state.config.weight_step)
 
 assert(os.remove(temp_dir .. "/tiger.user.dict.yaml"))
 assert(os.remove(temp_dir .. "/tigress.user.dict.yaml"))

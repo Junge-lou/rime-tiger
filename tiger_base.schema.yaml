@@ -166,6 +166,10 @@ reverse_lookup:
 
 
 
+smart_candidate_selection:
+  enabled: true # 次选键跳过 emoji 和符号联想；false 恢复按候选位置选重
+
+
 key_binder:
   #  import_preset: default
   bindings:

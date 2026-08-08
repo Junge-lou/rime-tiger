@@ -5,14 +5,19 @@ local M = {}
 local option_state = require("option_state")
 
 local OPTION_NAME = "input_speed_stat"
-local SESSION_TIMEOUT_MS = 3000
+local SESSION_TIMEOUT_MS = 5000
+local MIN_SESSION_MS = 1000
+local PEAK_WINDOW_MS = 10000
 local IDLE_SAVE_MS = 10000
 local kAccepted = 1
 local kNoop = 2
 local KEY_SPACE = 0x20
 local KEY_RETURN = 0xff0d
+local KEY_BACKSPACE = 0xff08
+local KEY_ESCAPE = 0xff1b
 
 local state = {}
+local option_cache = setmetatable({}, { __mode = "k" })
 local now_ms_fn
 local os_time_fn
 
@@ -34,15 +39,65 @@ local function now_sec()
 end
 
 local function new_period()
-  return { chars = 0, seconds = 0.0 }
+  return {
+    commits = 0,
+    chars = 0,
+    seconds = 0.0,
+    hit_count = 0,
+    final_code_length = 0,
+    backspace_count = 0,
+    manual_commit_count = 0,
+    auto_commit_count = 0,
+    word_chars = 0,
+    single_commit_count = 0,
+    word_commit_count = 0,
+    lengths = {},
+    code_lengths = {},
+    peak = { speed = 0, hit = 0, code_length = 0 },
+  }
+end
+
+local function non_negative_number(value)
+  local number = tonumber(value)
+  if not number or number ~= number or number == math.huge or number == -math.huge or number < 0 then
+    return 0
+  end
+  return number
 end
 
 local function add_period(target, source)
   if type(source) ~= "table" then
     return
   end
-  target.chars = target.chars + (source.chars or 0)
-  target.seconds = target.seconds + (source.seconds or 0)
+  target.commits = target.commits + non_negative_number(source.commits or source.count)
+  target.chars = target.chars + non_negative_number(source.chars or source.length)
+  target.seconds = target.seconds + non_negative_number(source.seconds)
+  target.hit_count = target.hit_count + non_negative_number(source.hit_count or source.keyTouchCnt)
+  target.final_code_length = target.final_code_length
+    + non_negative_number(source.final_code_length or source.totalCodeLenWithoutSpace)
+  target.backspace_count = target.backspace_count + non_negative_number(source.backspace_count)
+  target.manual_commit_count = target.manual_commit_count + non_negative_number(source.manual_commit_count)
+  target.auto_commit_count = target.auto_commit_count + non_negative_number(source.auto_commit_count)
+  target.word_chars = target.word_chars + non_negative_number(source.word_chars)
+  target.single_commit_count = target.single_commit_count + non_negative_number(source.single_commit_count)
+  target.word_commit_count = target.word_commit_count + non_negative_number(source.word_commit_count)
+  local lengths = type(source.lengths) == "table" and source.lengths or {}
+  for key, value in pairs(lengths) do
+    target.lengths[key] = (target.lengths[key] or 0) + non_negative_number(value)
+  end
+  local code_lengths = source.code_lengths or source.codeLengths
+  code_lengths = type(code_lengths) == "table" and code_lengths or {}
+  for key, value in pairs(code_lengths) do
+    target.code_lengths[key] = (target.code_lengths[key] or 0) + non_negative_number(value)
+  end
+  local source_peak = source.peak
+  if type(source_peak) == "table" and non_negative_number(source_peak.speed or source_peak.spd) > target.peak.speed then
+    target.peak = {
+      speed = non_negative_number(source_peak.speed or source_peak.spd),
+      hit = non_negative_number(source_peak.hit or source_peak.keyTouchSpd),
+      code_length = non_negative_number(source_peak.code_length or source_peak.avgCodeLen),
+    }
+  end
 end
 
 local function same_day(a, b)
@@ -57,7 +112,96 @@ local function same_year(a, b)
   return a and b and a.year == b.year
 end
 
+local function start_of_week(t)
+  local days_from_monday = (t.wday + 5) % 7
+  return os.time({ year = t.year, month = t.month, day = t.day - days_from_monday, hour = 0 })
+end
+
+local function normalize_date(value, fallback)
+  if type(value) ~= "table" then
+    return fallback
+  end
+  local year = tonumber(value.year)
+  local month = tonumber(value.month)
+  local day = tonumber(value.day)
+  if not year or not month or not day or month < 1 or month > 12 or day < 1 or day > 31 then
+    return fallback
+  end
+  local ok, timestamp = pcall(os.time, { year = year, month = month, day = day, hour = 12 })
+  if not ok or not timestamp then
+    return fallback
+  end
+  local date = os.date("*t", timestamp)
+  return date
+end
+
+local function normalize_period(value)
+  local period = new_period()
+  if type(value) ~= "table" then
+    return period
+  end
+
+  period.commits = non_negative_number(value.commits or value.count)
+  period.chars = non_negative_number(value.chars or value.length)
+  period.seconds = non_negative_number(value.seconds)
+  period.hit_count = non_negative_number(value.hit_count or value.keyTouchCnt)
+  period.final_code_length = non_negative_number(value.final_code_length or value.totalCodeLenWithoutSpace)
+  period.backspace_count = non_negative_number(value.backspace_count)
+  period.manual_commit_count = non_negative_number(value.manual_commit_count)
+  period.auto_commit_count = non_negative_number(value.auto_commit_count)
+  period.word_chars = non_negative_number(value.word_chars)
+  period.single_commit_count = non_negative_number(value.single_commit_count)
+  period.word_commit_count = non_negative_number(value.word_commit_count)
+  local lengths = type(value.lengths) == "table" and value.lengths or {}
+  for key, count in pairs(lengths) do
+    local numeric_key = tonumber(key)
+    local numeric_count = tonumber(count)
+    if numeric_key and numeric_count and numeric_count == numeric_count
+        and numeric_count ~= math.huge and numeric_count ~= -math.huge and numeric_count >= 0 then
+      period.lengths[numeric_key] = numeric_count
+    end
+  end
+  local code_lengths = value.code_lengths or value.codeLengths
+  code_lengths = type(code_lengths) == "table" and code_lengths or {}
+  for key, count in pairs(code_lengths) do
+    local numeric_key = tonumber(key)
+    local numeric_count = tonumber(count)
+    if numeric_key and numeric_count and numeric_count == numeric_count
+        and numeric_count ~= math.huge and numeric_count ~= -math.huge and numeric_count >= 0 then
+      period.code_lengths[numeric_key] = numeric_count
+    end
+  end
+  local peak = value.peak or value.fastest
+  if type(peak) == "table" then
+    period.peak = {
+      speed = non_negative_number(peak.speed or peak.spd),
+      hit = non_negative_number(peak.hit or peak.keyTouchSpd),
+      code_length = non_negative_number(peak.code_length or peak.avgCodeLen),
+    }
+  end
+  return period
+end
+
+local function period_metrics(period)
+  local chars = period.chars or 0
+  local seconds = period.seconds or 0
+  local hit_count = period.hit_count or 0
+  local code_length = period.final_code_length or 0
+  return {
+    speed = seconds > 0 and chars / seconds * 60 or 0,
+    hit = seconds > 0 and hit_count / seconds or 0,
+    code_length = chars > 0 and code_length / chars or 0,
+    word_rate = chars > 0 and (period.word_chars or 0) / chars * 100 or 0,
+    backspace_rate = hit_count > 0 and (period.backspace_count or 0) / hit_count * 100 or 0,
+    manual_rate = (period.commits or 0) > 0
+      and (period.manual_commit_count or 0) / period.commits * 100 or 0,
+    auto_rate = (period.commits or 0) > 0
+      and (period.auto_commit_count or 0) / period.commits * 100 or 0,
+  }
+end
+
 local function reset_state()
+  option_cache = setmetatable({}, { __mode = "k" })
   state = {
     stats_file = nil,
     env = nil,
@@ -71,16 +215,21 @@ local function reset_state()
     last_commit_ms = 0,
     pending_input = "",
     pending_input_start_ms = nil,
+    pending_metrics = nil,
     session_chars = 0,
     session_active = false,
+    session_hit_count = 0,
+    session_code_length = 0,
+    session_samples = {},
     notice_pending = false,
     previous_session = { speed = 0, chars = 0, seconds = 0.0 },
     stats = {
       daily = new_period(),
+      weekly = new_period(),
       monthly = new_period(),
       yearly = new_period(),
       total = new_period(),
-      last_update = os.date("*t"),
+      last_update = os.date("*t", now_sec()),
     },
   }
 end
@@ -124,11 +273,21 @@ local function get_context(env)
 end
 
 local function enabled(env, force_sync)
+  if not force_sync and env and option_cache[env] ~= nil then
+    return option_cache[env]
+  end
+
   local ctx = get_context(env)
   if not ctx or not ctx.get_option then
-    return option_state.get(OPTION_NAME, false, force_sync)
+    local value = option_state.get(OPTION_NAME, false, force_sync)
+    if env then
+      option_cache[env] = value
+    end
+    return value
   end
-  return option_state.sync(env, OPTION_NAME, ctx:get_option(OPTION_NAME) and true or false, force_sync)
+  local value = option_state.sync(env, OPTION_NAME, ctx:get_option(OPTION_NAME) and true or false, force_sync)
+  option_cache[env] = value
+  return value
 end
 
 local function serialize(tbl, indent)
@@ -197,6 +356,39 @@ local function count_chars(text)
   return count
 end
 
+local function is_chinese_codepoint(code)
+  return (code >= 0x4e00 and code <= 0x9fff)
+    or (code >= 0x3400 and code <= 0x4dbf)
+    or (code >= 0x20000 and code <= 0x2a6df)
+    or (code >= 0x2a700 and code <= 0x2b73f)
+    or (code >= 0x2b740 and code <= 0x2b81f)
+    or (code >= 0x2b820 and code <= 0x2ceaf)
+    or (code >= 0x2ceb0 and code <= 0x2ebef)
+    or (code >= 0x30000 and code <= 0x3134f)
+    or (code >= 0x31350 and code <= 0x323af)
+    or (code >= 0x2ebf0 and code <= 0x2ee5f)
+    or (code >= 0x31c0 and code <= 0x31ef)
+    or (code >= 0x2e80 and code <= 0x2eff)
+    or (code >= 0x2f00 and code <= 0x2fdf)
+    or (code >= 0xf900 and code <= 0xfadf)
+    or (code >= 0x2f800 and code <= 0x2fa1f)
+    or (code >= 0x2ff0 and code <= 0x2fff)
+    or (code >= 0x3100 and code <= 0x312f)
+    or (code >= 0x31a0 and code <= 0x31bf)
+end
+
+local function is_all_chinese(text)
+  if type(text) ~= "string" or text == "" then
+    return false
+  end
+  for _, code in utf8.codes(text) do
+    if not is_chinese_codepoint(code) then
+      return false
+    end
+  end
+  return true
+end
+
 local function format_number(number)
   local s = tostring(math.floor(number or 0))
   local out = {}
@@ -258,12 +450,21 @@ local function mark_dirty_without_activity()
   state.dirty = true
 end
 
+local function clear_pending_input()
+  state.pending_input = ""
+  state.pending_input_start_ms = nil
+  state.pending_metrics = nil
+end
+
 local function update_date_stats()
   local current = os.date("*t", now_sec())
   local last = state.stats.last_update or current
 
   if current.year ~= last.year or current.month ~= last.month or current.day ~= last.day then
     state.stats.daily = new_period()
+  end
+  if start_of_week(current) ~= start_of_week(last) then
+    state.stats.weekly = new_period()
   end
   if current.year ~= last.year or current.month ~= last.month then
     state.stats.monthly = new_period()
@@ -277,6 +478,7 @@ end
 
 local function add_period_seconds(seconds)
   state.stats.daily.seconds = state.stats.daily.seconds + seconds
+  state.stats.weekly.seconds = state.stats.weekly.seconds + seconds
   state.stats.monthly.seconds = state.stats.monthly.seconds + seconds
   state.stats.yearly.seconds = state.stats.yearly.seconds + seconds
   state.stats.total.seconds = state.stats.total.seconds + seconds
@@ -301,7 +503,7 @@ local function finish_session()
   end
 
   local seconds = active_session_seconds()
-  if seconds <= 0 then
+  if seconds * 1000 < MIN_SESSION_MS then
     state.session_active = false
     return false
   end
@@ -346,6 +548,7 @@ function M.save(force)
 end
 
 local function handle_disabled()
+  clear_pending_input()
   if state.session_active then
     finish_session()
     M.save(false)
@@ -376,7 +579,7 @@ local function load_stats(env)
       end)
       if legacy_ok and type(legacy_data) == "table" and type(legacy_data.stats) == "table" then
         local current = os.date("*t", now_sec())
-        local legacy_date = legacy_data.stats.last_update
+        local legacy_date = normalize_date(legacy_data.stats.last_update, nil)
         if same_day(current, legacy_date) then
           add_period(state.stats.daily, legacy_data.stats.daily)
         end
@@ -397,11 +600,12 @@ local function load_stats(env)
     return
   end
   if type(data.stats) == "table" then
-    state.stats.daily = data.stats.daily or new_period()
-    state.stats.monthly = data.stats.monthly or new_period()
-    state.stats.yearly = data.stats.yearly or new_period()
-    state.stats.total = data.stats.total or new_period()
-    state.stats.last_update = data.stats.last_update or os.date("*t", now_sec())
+    state.stats.daily = normalize_period(data.stats.daily)
+    state.stats.weekly = normalize_period(data.stats.weekly)
+    state.stats.monthly = normalize_period(data.stats.monthly)
+    state.stats.yearly = normalize_period(data.stats.yearly)
+    state.stats.total = normalize_period(data.stats.total)
+    state.stats.last_update = normalize_date(data.stats.last_update, os.date("*t", now_sec()))
   end
   if type(data.previous_session) == "table" then
     state.previous_session = {
@@ -420,20 +624,108 @@ local function start_session(current_ms)
   state.session_active = true
 end
 
-function M.record_commit_text(text, env, input_start_ms)
+local function update_period_commit(period, len, metrics)
+  local code_length = non_negative_number(metrics.code_length)
+  local hit_count = non_negative_number(metrics.hit_count)
+  local backspace_count = non_negative_number(metrics.backspace_count)
+  period.commits = period.commits + 1
+  period.chars = period.chars + len
+  period.hit_count = period.hit_count + hit_count
+  period.final_code_length = period.final_code_length + code_length
+  period.backspace_count = period.backspace_count + backspace_count
+  if metrics.manual then
+    period.manual_commit_count = period.manual_commit_count + 1
+  else
+    period.auto_commit_count = period.auto_commit_count + 1
+  end
+
+  if len == 1 then
+    period.single_commit_count = period.single_commit_count + 1
+  else
+    period.word_commit_count = period.word_commit_count + 1
+    period.word_chars = period.word_chars + len
+  end
+  period.lengths[len] = (period.lengths[len] or 0) + 1
+  if code_length > 0 then
+    period.code_lengths[code_length] = (period.code_lengths[code_length] or 0) + 1
+  end
+end
+
+local function update_peak_windows(current_ms)
+  local first = 1
+  while first <= #state.session_samples
+    and current_ms - state.session_samples[first].time_ms > PEAK_WINDOW_MS do
+    first = first + 1
+  end
+  if first > 1 then
+    for _ = 1, first - 1 do
+      table.remove(state.session_samples, 1)
+    end
+  end
+  if #state.session_samples < 2 then
+    return
+  end
+
+  local oldest = state.session_samples[1]
+  local duration_ms = current_ms - oldest.time_ms
+  if duration_ms < PEAK_WINDOW_MS then
+    return
+  end
+
+  local chars = 0
+  local hits = 0
+  local code_length = 0
+  for _, sample in ipairs(state.session_samples) do
+    chars = chars + sample.chars
+    hits = hits + sample.hit_count
+    code_length = code_length + sample.code_length
+  end
+  if chars <= 0 then
+    return
+  end
+
+  local speed = chars / (duration_ms / 1000.0) * 60
+  local hit = hits / (duration_ms / 1000.0)
+  local avg_code_length = code_length / chars
+  for _, period in pairs({
+    state.stats.daily,
+    state.stats.weekly,
+    state.stats.monthly,
+    state.stats.yearly,
+    state.stats.total,
+  }) do
+    if speed > (period.peak.speed or 0) then
+      period.peak = {
+        speed = speed,
+        hit = hit,
+        code_length = avg_code_length,
+      }
+    end
+  end
+end
+
+local function record_commit(text, env, input_start_ms, metrics)
+  state.env = env or state.env
   if not enabled(env) then
     handle_disabled()
-    return
+    return false
+  end
+
+  if not is_all_chinese(text) then
+    clear_pending_input()
+    return false
   end
 
   local len = count_chars(text)
   if len < 1 then
-    return
+    clear_pending_input()
+    return false
   end
 
+  metrics = metrics or state.pending_metrics or {}
   update_date_stats()
   local current_ms = now_ms()
-  local start_ms = input_start_ms or current_ms
+  local start_ms = input_start_ms or metrics.input_start_ms or current_ms
   if start_ms > current_ms then
     start_ms = current_ms
   end
@@ -446,14 +738,43 @@ function M.record_commit_text(text, env, input_start_ms)
     state.session_start_ms = start_ms
   end
 
-  state.session_chars = state.session_chars + len
-  state.last_commit_ms = current_ms
+  local input = type(metrics.input) == "string" and metrics.input
+    or (type(state.pending_input) == "string" and state.pending_input or "")
+  local commit_metrics = {
+    input = input,
+    code_length = non_negative_number(metrics.code_length ~= nil and metrics.code_length or #input),
+    hit_count = non_negative_number(metrics.hit_count),
+    backspace_count = non_negative_number(metrics.backspace_count),
+    manual = metrics.manual and true or false,
+  }
+  for _, period in pairs({
+    state.stats.daily,
+    state.stats.weekly,
+    state.stats.monthly,
+    state.stats.yearly,
+    state.stats.total,
+  }) do
+    update_period_commit(period, len, commit_metrics)
+  end
 
-  state.stats.daily.chars = state.stats.daily.chars + len
-  state.stats.monthly.chars = state.stats.monthly.chars + len
-  state.stats.yearly.chars = state.stats.yearly.chars + len
-  state.stats.total.chars = state.stats.total.chars + len
+  state.session_chars = state.session_chars + len
+  state.session_hit_count = state.session_hit_count + commit_metrics.hit_count
+  state.session_code_length = state.session_code_length + commit_metrics.code_length
+  state.session_samples[#state.session_samples + 1] = {
+    time_ms = current_ms,
+    chars = len,
+    hit_count = commit_metrics.hit_count,
+    code_length = commit_metrics.code_length,
+  }
+  update_peak_windows(current_ms)
+  state.last_commit_ms = current_ms
+  clear_pending_input()
   mark_dirty()
+  return true
+end
+
+function M.record_commit_text(text, env, input_start_ms)
+  return record_commit(text, env, input_start_ms, nil)
 end
 
 local function speed_summary()
@@ -482,19 +803,112 @@ local function period_summary(label, period)
 end
 
 local function period_with_active_seconds(period)
-  if active_session_seconds() <= 0 then
-    return period
+  local view = normalize_period(period)
+  view.seconds = view.seconds + active_session_seconds()
+  return view
+end
+
+local function format_decimal(number, digits)
+  return string.format("%." .. tostring(digits or 1) .. "f", number or 0)
+end
+
+local function format_percent(number, digits)
+  return format_decimal(number, digits or 1) .. "%"
+end
+
+local function format_integer_percent(number)
+  return string.format("%d%%", math.floor((number or 0) + 0.5))
+end
+
+local function progress_bar(percent)
+  local filled = math.floor(math.max(0, math.min(100, percent or 0)) / 10)
+  return string.rep("▓", filled) .. string.rep("░", 10 - filled)
+end
+
+local function distribution_row(label, count, total)
+  local percent = total > 0 and count / total * 100 or 0
+  return string.format("[%s] %3d%% %s", label, math.floor(percent + 0.5), progress_bar(percent))
+end
+
+local function word_distribution(period)
+  local total = period.commits or 0
+  local long_count = 0
+  for length, count in pairs(period.lengths or {}) do
+    if tonumber(length) >= 5 then
+      long_count = long_count + count
+    end
   end
-  return {
-    chars = period.chars,
-    seconds = (period.seconds or 0) + active_session_seconds(),
-  }
+  return table.concat({
+    distribution_row("1", period.lengths[1] or 0, total),
+    distribution_row("2", period.lengths[2] or 0, total),
+    distribution_row("3", period.lengths[3] or 0, total),
+    distribution_row("4", period.lengths[4] or 0, total),
+    distribution_row("+", long_count, total),
+  }, "\n")
+end
+
+local function code_distribution(period)
+  local total = period.commits or 0
+  local other_count = 0
+  for length, count in pairs(period.code_lengths or {}) do
+    if tonumber(length) < 1 or tonumber(length) > 4 then
+      other_count = other_count + count
+    end
+  end
+  return table.concat({
+    distribution_row("1码", period.code_lengths[1] or 0, total),
+    distribution_row("2码", period.code_lengths[2] or 0, total),
+    distribution_row("3码", period.code_lengths[3] or 0, total),
+    distribution_row("4码", period.code_lengths[4] or 0, total),
+    distribution_row("其他", other_count, total),
+  }, "\n")
+end
+
+local function compact_report(label, period)
+  local metrics = period_metrics(period)
+  local peak_speed = math.floor((period.peak.speed or 0) + 0.5)
+  return table.concat({
+    string.format("%s统计：上屏 %s 次 · 字数 %s", label, format_number(period.commits), format_number(period.chars)),
+    string.format("均速 %d · 峰速 %d", avg_speed(period), peak_speed),
+    string.format("击键 %s · 码长 %s · 打词率 %s", format_decimal(metrics.hit, 2),
+      format_decimal(metrics.code_length, 2), format_percent(metrics.word_rate, 1)),
+    string.format("空格 %s · 顶屏 %s", format_integer_percent(metrics.manual_rate),
+      format_integer_percent(metrics.auto_rate)),
+    string.format("回改 %s 次 · 回改率 %s", format_number(period.backspace_count),
+      format_percent(metrics.backspace_rate, 1)),
+  }, "\n")
+end
+
+local function detail_report(label, period)
+  local metrics = period_metrics(period)
+  local peak_speed = math.floor((period.peak.speed or 0) + 0.5)
+  return table.concat({
+    string.format("※ %s统计 · 效率仪表盘", label),
+    "───────────────",
+    "📊 综合数据",
+    string.format("均速 %d    上屏 %s", avg_speed(period), format_number(period.commits)),
+    string.format("峰速 %d    字数 %s", peak_speed, format_number(period.chars)),
+    "",
+    "⚡ 核心效率",
+    string.format("击键 %s    码长 %s", format_decimal(metrics.hit, 2), format_decimal(metrics.code_length, 2)),
+    string.format("打词率 %s", format_percent(metrics.word_rate, 1)),
+    string.format("空格 %s · 顶屏 %s", format_integer_percent(metrics.manual_rate),
+      format_integer_percent(metrics.auto_rate)),
+    string.format("回改 %s 次 · 回改率 %s", format_number(period.backspace_count),
+      format_percent(metrics.backspace_rate, 1)),
+    "",
+    "📈 字词分布",
+    word_distribution(period),
+    "",
+    "🎯 编码分布",
+    code_distribution(period),
+  }, "\n")
 end
 
 local function brief_summary()
   maybe_finish_idle_session()
   update_date_stats()
-  return period_summary("今日", period_with_active_seconds(state.stats.daily))
+  return compact_report("今日", period_with_active_seconds(state.stats.daily))
 end
 
 local function detail_summaries()
@@ -502,14 +916,17 @@ local function detail_summaries()
   update_date_stats()
   local s = state.stats
   local rows = {}
-  local text, comment = period_summary("今日", period_with_active_seconds(s.daily))
-  table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("本月", period_with_active_seconds(s.monthly))
-  table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("本年", period_with_active_seconds(s.yearly))
-  table.insert(rows, { text = text, comment = comment })
-  text, comment = period_summary("总计", period_with_active_seconds(s.total))
-  table.insert(rows, { text = text, comment = comment })
+  for _, item in ipairs({
+    { label = "今日", period = s.daily },
+    { label = "本周", period = s.weekly },
+    { label = "本月", period = s.monthly },
+    { label = "本年", period = s.yearly },
+  }) do
+    table.insert(rows, {
+      text = detail_report(item.label, period_with_active_seconds(item.period)),
+      comment = item.label .. "效率统计",
+    })
+  end
   return rows
 end
 
@@ -651,13 +1068,68 @@ local function open_command(ctx, command)
   end
 end
 
+local function is_encoding_key(keycode)
+  return (keycode >= string.byte("a") and keycode <= string.byte("z"))
+    or (keycode >= string.byte("A") and keycode <= string.byte("Z"))
+    or keycode == string.byte(";")
+    or keycode == string.byte("'")
+end
+
+local function is_manual_commit_key(keycode)
+  return keycode == KEY_SPACE
+    or keycode == KEY_RETURN
+    or (keycode >= string.byte("0") and keycode <= string.byte("9"))
+end
+
+local function ensure_pending_metrics()
+  if not state.pending_metrics then
+    state.pending_metrics = {
+      hit_count = 0,
+      backspace_count = 0,
+      manual = false,
+    }
+  end
+  return state.pending_metrics
+end
+
+local function record_key(keycode, env)
+  state.env = env or state.env
+  if not enabled(env) then
+    handle_disabled()
+    return
+  end
+
+  local ctx = get_context(env)
+  local input = ctx and ctx.input or state.pending_input or ""
+  if input:sub(1, 1) == "\\" then
+    return
+  end
+
+  if is_encoding_key(keycode) then
+    local metrics = ensure_pending_metrics()
+    metrics.hit_count = metrics.hit_count + 1
+    if state.pending_input_start_ms == nil then
+      state.pending_input_start_ms = now_ms()
+    end
+  elseif keycode == KEY_BACKSPACE then
+    local metrics = ensure_pending_metrics()
+    metrics.backspace_count = metrics.backspace_count + 1
+  elseif keycode == KEY_ESCAPE then
+    clear_pending_input()
+  elseif is_manual_commit_key(keycode) then
+    ensure_pending_metrics().manual = true
+  end
+end
+
 function processor.func(key_event, env)
-  if key_event:release() or key_event:alt() or key_event:ctrl() or key_event:caps() then
+  local shifted = key_event.shift and key_event:shift()
+  if key_event:release() or key_event:alt() or key_event:ctrl() or key_event:caps() or shifted then
     return kNoop
   end
 
   local ctx = get_context(env)
   if not ctx or ctx.input ~= "\\tj" then
+    record_key(key_event.keycode, env)
     return kNoop
   end
 
@@ -717,8 +1189,6 @@ local function commit_callback(ctx)
 
   local text = ctx:get_commit_text()
   local input_start_ms = state.pending_input_start_ms
-  state.pending_input = ""
-  state.pending_input_start_ms = nil
   M.record_commit_text(text, state.env, input_start_ms)
 end
 
@@ -726,19 +1196,26 @@ local function update_callback(ctx)
   maybe_finish_idle_session()
   maybe_idle_save()
   if not enabled(state.env) then
-    state.pending_input = ""
-    state.pending_input_start_ms = nil
+    clear_pending_input()
     return
   end
 
   local input = ctx.input or ""
-  if input == "" or input:sub(1, 1) == "\\" then
+  if input:sub(1, 1) == "\\" then
+    clear_pending_input()
     state.pending_input = input
-    state.pending_input_start_ms = nil
+    return
+  end
+  if input == "" then
+    if not state.pending_metrics or state.pending_metrics.backspace_count <= 0 then
+      clear_pending_input()
+    else
+      state.pending_input = ""
+    end
     return
   end
 
-  if state.pending_input == "" or state.pending_input_start_ms == nil then
+  if state.pending_input_start_ms == nil then
     state.pending_input_start_ms = now_ms()
   end
   state.pending_input = input
@@ -758,7 +1235,9 @@ function translator.init(env)
   end
   if ctx and ctx.option_update_notifier and ctx.option_update_notifier.connect then
     state.option_notifier = ctx.option_update_notifier:connect(function()
-      option_state.set(OPTION_NAME, ctx:get_option(OPTION_NAME) and true or false)
+      local value = ctx:get_option(OPTION_NAME) and true or false
+      option_cache[env] = value
+      option_state.set(OPTION_NAME, value)
     end)
   end
   enabled(env, true)
@@ -780,6 +1259,7 @@ function translator.fini()
   state.notifier = nil
   state.update_notifier = nil
   state.option_notifier = nil
+  clear_pending_input()
   M.save(false)
 end
 
@@ -794,10 +1274,30 @@ end
 function M._test_commit(text, env, input_start_ms)
   if input_start_ms == nil then
     input_start_ms = state.pending_input_start_ms
-    state.pending_input = ""
-    state.pending_input_start_ms = nil
   end
   M.record_commit_text(text, env, input_start_ms)
+end
+
+function M._test_record_commit(text, env, metrics)
+  return record_commit(text, env, metrics and metrics.input_start_ms, metrics)
+end
+
+function M._test_state()
+  return state
+end
+
+function M._test_metrics(period)
+  return period_metrics(period)
+end
+
+function M._test_brief(env)
+  state.env = env or state.env
+  return brief_summary()
+end
+
+function M._test_details(env)
+  state.env = env or state.env
+  return detail_summaries()
 end
 
 function M._test_update_input(input, env)
@@ -807,6 +1307,10 @@ function M._test_update_input(input, env)
     ctx.input = input
     update_callback(ctx)
   end
+end
+
+function M._test_key(keycode, env)
+  record_key(keycode, env)
 end
 
 function M._test_stats_file(env)
