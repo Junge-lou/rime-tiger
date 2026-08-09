@@ -59,12 +59,19 @@ local function runtime(options)
   local state = {
     confirmed = false,
     selected = nil,
+    prepared = 0,
+    prepare_calls = {},
   }
   local menu = {
     prepare = function(_, count)
-      return math.min(count, #candidates)
+      table.insert(state.prepare_calls, count)
+      state.prepared = math.max(state.prepared, math.min(count, #candidates))
+      return state.prepared
     end,
     get_candidate_at = function(_, index)
+      if index >= state.prepared then
+        return nil
+      end
       return candidates[index + 1]
     end,
   }
@@ -145,6 +152,63 @@ local function test_apostrophe_skips_associations_for_third_text_candidate()
 
   assert_equal(result, kAccepted, "apostrophe consumes smart selection")
   assert_equal(state.selected, 4, "apostrophe selects the third text candidate")
+end
+
+local function association_candidates(before_second, before_third)
+  local candidates = { candidate("甲") }
+  for _ = 1, before_second do
+    table.insert(candidates, candidate("😀", "simplified"))
+  end
+  table.insert(candidates, candidate("乙"))
+  for _ = 1, before_third or 0 do
+    table.insert(candidates, candidate("✓", "simplified"))
+  end
+  if before_third then
+    table.insert(candidates, candidate("丙"))
+  end
+  return candidates
+end
+
+local function test_semicolon_scans_beyond_first_candidate_page()
+  local result, state = process({
+    candidates = association_candidates(39),
+  }, "semicolon")
+
+  assert_equal(result, kAccepted, "semicolon consumes a later smart selection")
+  assert_equal(state.selected, 40, "semicolon reaches the second text candidate beyond page one")
+  assert_equal(#state.prepare_calls, 3, "later selection prepares only the needed chunks")
+  assert_equal(state.prepare_calls[3], 41, "later selection grows the prepared menu by 32")
+end
+
+local function test_apostrophe_scans_multiple_candidate_chunks()
+  local result, state = process({
+    candidates = association_candidates(12, 30),
+  }, "apostrophe")
+
+  assert_equal(result, kAccepted, "apostrophe consumes a later smart selection")
+  assert_equal(state.selected, 44, "apostrophe reaches the third text candidate across chunks")
+  assert_equal(state.prepare_calls[4], 73, "third choice prepares another 32-candidate chunk")
+end
+
+local function test_smart_selection_includes_candidate_at_scan_limit()
+  local result, state = process({
+    candidates = association_candidates(510),
+  }, "semicolon")
+
+  assert_equal(result, kAccepted, "scan limit candidate remains selectable")
+  assert_equal(state.selected, 511, "the 512th candidate is inside the scan limit")
+  assert_equal(state.prepare_calls[#state.prepare_calls], 512, "scan stops at the hard limit")
+end
+
+local function test_smart_selection_does_not_scan_past_limit()
+  local result, state = process({
+    candidates = association_candidates(511),
+  }, "semicolon")
+
+  assert_equal(result, kNoop, "candidate beyond scan limit is not selected")
+  assert_equal(state.selected, 0, "first text candidate is retained when the limit is exhausted")
+  assert_equal(state.confirmed, true, "limit exhaustion preserves commit and pass-through")
+  assert_equal(state.prepare_calls[#state.prepare_calls], 512, "no menu request exceeds the hard limit")
 end
 
 local function test_simplified_keycap_digit_is_skipped()
@@ -249,6 +313,10 @@ end
 local tests = {
   test_semicolon_skips_association_for_second_text_candidate,
   test_apostrophe_skips_associations_for_third_text_candidate,
+  test_semicolon_scans_beyond_first_candidate_page,
+  test_apostrophe_scans_multiple_candidate_chunks,
+  test_smart_selection_includes_candidate_at_scan_limit,
+  test_smart_selection_does_not_scan_past_limit,
   test_simplified_keycap_digit_is_skipped,
   test_normal_ascii_digit_counts_as_text_candidate,
   test_extension_han_counts_as_text_candidate,

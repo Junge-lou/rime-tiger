@@ -21,6 +21,8 @@ local symbol_proc = {}
 
 local kAccepted = 1
 local kNoop = 2
+local kSmartScanChunkSize = 32
+local kSmartScanLimit = 512
 
 local function configured_enabled(env)
   local schema = env and env.engine and env.engine.schema
@@ -130,22 +132,33 @@ local function smart_select(key_event, env, context, seg)
     return nil, false
   end
 
-  seg.menu:prepare(page_size)
   local text_count = 0
   local first_text_index = nil
-  for index = 0, page_size - 1 do
-    local cand = seg.menu:get_candidate_at(index)
-    if not cand then
-      break
-    end
-    if is_text_candidate(cand) then
-      text_count = text_count + 1
-      first_text_index = first_text_index or index
-      if text_count == rank then
-        context:select(index)
-        return kAccepted, true
+  local scan_from = 0
+  local target = math.min(math.max(page_size, 1), kSmartScanLimit)
+  while target > 0 do
+    seg.menu:prepare(target)
+    local exhausted = false
+    for index = scan_from, target - 1 do
+      local cand = seg.menu:get_candidate_at(index)
+      if not cand then
+        exhausted = true
+        break
+      end
+      if is_text_candidate(cand) then
+        text_count = text_count + 1
+        first_text_index = first_text_index or index
+        if text_count == rank then
+          context:select(index)
+          return kAccepted, true
+        end
       end
     end
+    if exhausted or target >= kSmartScanLimit then
+      break
+    end
+    scan_from = target
+    target = math.min(target + kSmartScanChunkSize, kSmartScanLimit)
   end
 
   if first_text_index ~= nil then

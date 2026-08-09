@@ -4,7 +4,7 @@
 
 **Goal:** Make Tiger's `;` and `'` choice keys skip emoji/symbol associations, with a documented static setting that restores positional selection.
 
-**Architecture:** Extend the existing `lua/symbol_proc.lua` processor because it already runs before `key_binder` and owns unique-candidate punctuation behavior. The processor reads `smart_candidate_selection/enabled` once during initialization, classifies candidates by their first Unicode codepoint using Moran's text-candidate rule, and directly selects the requested text candidate only on the first ordinary input page. Existing key bindings remain as the compatibility fallback.
+**Architecture:** Extend the existing `lua/symbol_proc.lua` processor because it already runs before `key_binder` and owns unique-candidate punctuation behavior. The processor reads `smart_candidate_selection/enabled` once during initialization, classifies candidates by their first Unicode codepoint using Moran's text-candidate rule, and, when selection is still on the first ordinary page, incrementally scans the candidate stream for the requested text candidate. Existing key bindings remain as the compatibility fallback.
 
 **Tech Stack:** Rime YAML schema/custom patches, librime-lua processor API, Lua 5.5 unit tests, shell test runner.
 
@@ -82,7 +82,7 @@ For unmodified `semicolon` and `apostrophe` events on the first page of ordinary
 local rank = repr == "semicolon" and 2 or repr == "apostrophe" and 3 or nil
 ```
 
-Prepare one page, count only text candidates from page index zero, and call `context:select(index)` when `rank` is reached. If the page has at least one text candidate but not the requested rank, select the first text candidate, call `context:confirm_current_selection()`, and return `kNoop` so punctuation continues through Rime. Inputs beginning with `\\` or `;`, shifted/modified events, and pages after the first bypass smart handling and retain the existing code path.
+Prepare the configured page size, count only text candidates from page index zero, and call `context:select(index)` when `rank` is reached. If needed, prepare 32 additional candidates at a time and inspect only the newly prepared range, stopping after 512 candidates. If the bounded stream has at least one text candidate but not the requested rank, select the first text candidate, call `context:confirm_current_selection()`, and return `kNoop` so punctuation continues through Rime. Inputs beginning with `\\` or `;`, shifted/modified events, and pages after the first bypass smart handling and retain the existing code path.
 
 - [ ] **Step 5: Run the processor tests and verify GREEN**
 

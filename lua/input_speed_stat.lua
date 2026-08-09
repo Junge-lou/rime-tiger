@@ -43,10 +43,16 @@ local function new_period()
     commits = 0,
     chars = 0,
     seconds = 0.0,
+    metric_commits = 0,
+    metric_chars = 0,
+    speed_chars = 0,
+    speed_seconds = 0.0,
+    speed_hit_count = 0,
     hit_count = 0,
     final_code_length = 0,
     backspace_count = 0,
     manual_commit_count = 0,
+    space_commit_count = 0,
     auto_commit_count = 0,
     word_chars = 0,
     single_commit_count = 0,
@@ -72,11 +78,17 @@ local function add_period(target, source)
   target.commits = target.commits + non_negative_number(source.commits or source.count)
   target.chars = target.chars + non_negative_number(source.chars or source.length)
   target.seconds = target.seconds + non_negative_number(source.seconds)
+  target.metric_commits = target.metric_commits + non_negative_number(source.metric_commits)
+  target.metric_chars = target.metric_chars + non_negative_number(source.metric_chars)
+  target.speed_chars = target.speed_chars + non_negative_number(source.speed_chars)
+  target.speed_seconds = target.speed_seconds + non_negative_number(source.speed_seconds)
+  target.speed_hit_count = target.speed_hit_count + non_negative_number(source.speed_hit_count)
   target.hit_count = target.hit_count + non_negative_number(source.hit_count or source.keyTouchCnt)
   target.final_code_length = target.final_code_length
     + non_negative_number(source.final_code_length or source.totalCodeLenWithoutSpace)
   target.backspace_count = target.backspace_count + non_negative_number(source.backspace_count)
   target.manual_commit_count = target.manual_commit_count + non_negative_number(source.manual_commit_count)
+  target.space_commit_count = target.space_commit_count + non_negative_number(source.space_commit_count)
   target.auto_commit_count = target.auto_commit_count + non_negative_number(source.auto_commit_count)
   target.word_chars = target.word_chars + non_negative_number(source.word_chars)
   target.single_commit_count = target.single_commit_count + non_negative_number(source.single_commit_count)
@@ -117,6 +129,10 @@ local function start_of_week(t)
   return os.time({ year = t.year, month = t.month, day = t.day - days_from_monday, hour = 0 })
 end
 
+local function same_week(a, b)
+  return a and b and start_of_week(a) == start_of_week(b)
+end
+
 local function normalize_date(value, fallback)
   if type(value) ~= "table" then
     return fallback
@@ -148,6 +164,7 @@ local function normalize_period(value)
   period.final_code_length = non_negative_number(value.final_code_length or value.totalCodeLenWithoutSpace)
   period.backspace_count = non_negative_number(value.backspace_count)
   period.manual_commit_count = non_negative_number(value.manual_commit_count)
+  period.space_commit_count = non_negative_number(value.space_commit_count)
   period.auto_commit_count = non_negative_number(value.auto_commit_count)
   period.word_chars = non_negative_number(value.word_chars)
   period.single_commit_count = non_negative_number(value.single_commit_count)
@@ -161,6 +178,16 @@ local function normalize_period(value)
       period.lengths[numeric_key] = numeric_count
     end
   end
+  local inferred_metric_commits = 0
+  local inferred_metric_chars = 0
+  for length, count in pairs(period.lengths) do
+    inferred_metric_commits = inferred_metric_commits + count
+    inferred_metric_chars = inferred_metric_chars + length * count
+  end
+  period.metric_commits = value.metric_commits ~= nil
+    and non_negative_number(value.metric_commits) or inferred_metric_commits
+  period.metric_chars = value.metric_chars ~= nil
+    and non_negative_number(value.metric_chars) or inferred_metric_chars
   local code_lengths = value.code_lengths or value.codeLengths
   code_lengths = type(code_lengths) == "table" and code_lengths or {}
   for key, count in pairs(code_lengths) do
@@ -179,24 +206,81 @@ local function normalize_period(value)
       code_length = non_negative_number(peak.code_length or peak.avgCodeLen),
     }
   end
+
+  local has_speed_fields = value.speed_seconds ~= nil
+    or value.speed_chars ~= nil
+    or value.speed_hit_count ~= nil
+  if has_speed_fields then
+    period.speed_chars = non_negative_number(value.speed_chars)
+    period.speed_seconds = non_negative_number(value.speed_seconds)
+    period.speed_hit_count = non_negative_number(value.speed_hit_count)
+  end
   return period
 end
 
+local function sample_date(value)
+  local date = normalize_date(value, nil)
+  if not date then
+    return nil
+  end
+  return {
+    year = date.year,
+    month = date.month,
+    day = date.day,
+    wday = date.wday,
+  }
+end
+
+local function normalize_session_samples(value)
+  local samples = {}
+  if type(value) ~= "table" then
+    return samples
+  end
+  for _, item in ipairs(value) do
+    if type(item) == "table" then
+      local duration_ms = non_negative_number(item.duration_ms)
+      local chars = non_negative_number(item.chars)
+      local date = sample_date(item.date)
+      if duration_ms >= MIN_SESSION_MS and chars > 0 and date then
+        samples[#samples + 1] = {
+          duration_ms = duration_ms,
+          chars = chars,
+          hit_count = non_negative_number(item.hit_count),
+          code_length = non_negative_number(item.code_length),
+          date = date,
+        }
+      end
+    end
+  end
+
+  local duration_ms = 0
+  local keep_from = #samples
+  for index = #samples, 1, -1 do
+    duration_ms = duration_ms + samples[index].duration_ms
+    keep_from = index
+    if duration_ms >= PEAK_WINDOW_MS then
+      break
+    end
+  end
+  for _ = 1, keep_from - 1 do
+    table.remove(samples, 1)
+  end
+  return samples
+end
+
 local function period_metrics(period)
-  local chars = period.chars or 0
-  local seconds = period.seconds or 0
-  local hit_count = period.hit_count or 0
+  local chars = period.metric_chars or 0
+  local seconds = period.speed_seconds or 0
+  local speed_chars = period.speed_chars or 0
+  local hit_count = period.speed_hit_count or 0
   local code_length = period.final_code_length or 0
   return {
-    speed = seconds > 0 and chars / seconds * 60 or 0,
+    speed = seconds > 0 and speed_chars / seconds * 60 or 0,
     hit = seconds > 0 and hit_count / seconds or 0,
     code_length = chars > 0 and code_length / chars or 0,
     word_rate = chars > 0 and (period.word_chars or 0) / chars * 100 or 0,
-    backspace_rate = hit_count > 0 and (period.backspace_count or 0) / hit_count * 100 or 0,
-    manual_rate = (period.commits or 0) > 0
-      and (period.manual_commit_count or 0) / period.commits * 100 or 0,
-    auto_rate = (period.commits or 0) > 0
-      and (period.auto_commit_count or 0) / period.commits * 100 or 0,
+    backspace_rate = (period.hit_count or 0) > 0
+      and (period.backspace_count or 0) / period.hit_count * 100 or 0,
   }
 end
 
@@ -435,8 +519,8 @@ local function format_duration(seconds)
 end
 
 local function avg_speed(period)
-  if period.seconds and period.seconds > 0 then
-    return math.floor(period.chars / period.seconds * 60 + 0.5)
+  if period.speed_seconds and period.speed_seconds > 0 then
+    return math.floor((period.speed_chars or 0) / period.speed_seconds * 60 + 0.5)
   end
   return 0
 end
@@ -456,8 +540,8 @@ local function clear_pending_input()
   state.pending_metrics = nil
 end
 
-local function update_date_stats()
-  local current = os.date("*t", now_sec())
+local function update_date_stats(current)
+  current = current or os.date("*t", now_sec())
   local last = state.stats.last_update or current
 
   if current.year ~= last.year or current.month ~= last.month or current.day ~= last.day then
@@ -476,12 +560,23 @@ local function update_date_stats()
   state.stats.last_update = current
 end
 
-local function add_period_seconds(seconds)
-  state.stats.daily.seconds = state.stats.daily.seconds + seconds
-  state.stats.weekly.seconds = state.stats.weekly.seconds + seconds
-  state.stats.monthly.seconds = state.stats.monthly.seconds + seconds
-  state.stats.yearly.seconds = state.stats.yearly.seconds + seconds
-  state.stats.total.seconds = state.stats.total.seconds + seconds
+local function add_period_session(period, seconds, chars, hits)
+  period.seconds = period.seconds + seconds
+  period.speed_seconds = period.speed_seconds + seconds
+  period.speed_chars = period.speed_chars + chars
+  period.speed_hit_count = period.speed_hit_count + hits
+end
+
+local function add_session_to_periods(seconds)
+  for _, period in pairs({
+    state.stats.daily,
+    state.stats.weekly,
+    state.stats.monthly,
+    state.stats.yearly,
+    state.stats.total,
+  }) do
+    add_period_session(period, seconds, state.session_chars, state.session_hit_count)
+  end
 end
 
 local function active_session_seconds()
@@ -495,6 +590,8 @@ local function active_session_seconds()
   end
   return duration_ms / 1000.0
 end
+
+local update_peak_windows
 
 local function finish_session()
   if not state.session_active or state.session_chars <= 0 then
@@ -510,7 +607,15 @@ local function finish_session()
 
   local speed = math.floor(state.session_chars / seconds * 60 + 0.5)
   state.previous_session = { speed = speed, chars = state.session_chars, seconds = seconds }
-  add_period_seconds(seconds)
+  add_session_to_periods(seconds)
+  state.session_samples[#state.session_samples + 1] = {
+    duration_ms = seconds * 1000,
+    chars = state.session_chars,
+    hit_count = state.session_hit_count,
+    code_length = state.session_code_length,
+    date = sample_date(state.stats.last_update),
+  }
+  update_peak_windows()
   state.session_active = false
   mark_dirty_without_activity()
   return true
@@ -528,23 +633,86 @@ local function maybe_idle_save()
   end
 end
 
+local function file_exists(path)
+  local file = io.open(path, "r")
+  if not file then
+    return false
+  end
+  file:close()
+  return true
+end
+
+local function replace_file(temp_path, path)
+  if os.rename(temp_path, path) then
+    return true
+  end
+  if not file_exists(path) then
+    os.remove(temp_path)
+    return false
+  end
+
+  local backup_path = path .. ".bak"
+  os.remove(backup_path)
+  if not os.rename(path, backup_path) then
+    os.remove(temp_path)
+    return false
+  end
+  if not os.rename(temp_path, path) then
+    os.rename(backup_path, path)
+    os.remove(temp_path)
+    return false
+  end
+  os.remove(backup_path)
+  return true
+end
+
+local function write_atomic(path, content)
+  local temp_path = path .. ".tmp"
+  os.remove(temp_path)
+  local file = io.open(temp_path, "w")
+  if not file then
+    return false
+  end
+
+  local write_ok, write_result = pcall(file.write, file, content)
+  local close_ok, close_result = pcall(file.close, file)
+  if not write_ok or not write_result or not close_ok or not close_result then
+    os.remove(temp_path)
+    return false
+  end
+  return replace_file(temp_path, path)
+end
+
+local function recover_backup(path)
+  local backup_path = path .. ".bak"
+  if file_exists(path) or not file_exists(backup_path) then
+    return path, false
+  end
+  if os.rename(backup_path, path) then
+    return path, false
+  end
+  return backup_path, true
+end
+
 function M.save(force)
   if not force and not state.dirty then
-    return
-  end
-  local file = io.open(stats_file(state.env), "w")
-  if not file then
-    return
+    return true
   end
 
   local data = {
     stats = state.stats,
     previous_session = state.previous_session,
+    session_samples = state.session_samples,
   }
-  file:write("return " .. serialize(data) .. "\n")
-  file:close()
+  local serialized_ok, content = pcall(function()
+    return "return " .. serialize(data) .. "\n"
+  end)
+  if not serialized_ok or not write_atomic(stats_file(state.env), content) then
+    return false
+  end
   state.dirty = false
   state.last_save_ms = now_ms()
+  return true
 end
 
 local function handle_disabled()
@@ -557,13 +725,14 @@ end
 
 local function load_stats(env)
   local path = stats_file(env)
+  local load_path, loaded_from_backup = recover_backup(path)
   local ok, data = pcall(function()
-    local f = io.open(path, "r")
+    local f = io.open(load_path, "r")
     if not f then
       return nil
     end
     f:close()
-    return dofile(path)
+    return dofile(load_path)
   end)
 
   if not ok or type(data) ~= "table" then
@@ -581,15 +750,15 @@ local function load_stats(env)
         local current = os.date("*t", now_sec())
         local legacy_date = normalize_date(legacy_data.stats.last_update, nil)
         if same_day(current, legacy_date) then
-          add_period(state.stats.daily, legacy_data.stats.daily)
+          add_period(state.stats.daily, normalize_period(legacy_data.stats.daily))
         end
         if same_month(current, legacy_date) then
-          add_period(state.stats.monthly, legacy_data.stats.monthly)
+          add_period(state.stats.monthly, normalize_period(legacy_data.stats.monthly))
         end
         if same_year(current, legacy_date) then
-          add_period(state.stats.yearly, legacy_data.stats.yearly)
+          add_period(state.stats.yearly, normalize_period(legacy_data.stats.yearly))
         end
-        add_period(state.stats.total, legacy_data.stats.total)
+        add_period(state.stats.total, normalize_period(legacy_data.stats.total))
         migrated = true
       end
     end
@@ -614,6 +783,10 @@ local function load_stats(env)
       seconds = data.previous_session.seconds or 0.0,
     }
   end
+  state.session_samples = normalize_session_samples(data.session_samples)
+  if loaded_from_backup then
+    mark_dirty_without_activity()
+  end
   update_date_stats()
 end
 
@@ -621,6 +794,8 @@ local function start_session(current_ms)
   state.session_start_ms = current_ms
   state.last_commit_ms = current_ms
   state.session_chars = 0
+  state.session_hit_count = 0
+  state.session_code_length = 0
   state.session_active = true
 end
 
@@ -630,11 +805,16 @@ local function update_period_commit(period, len, metrics)
   local backspace_count = non_negative_number(metrics.backspace_count)
   period.commits = period.commits + 1
   period.chars = period.chars + len
+  period.metric_commits = period.metric_commits + 1
+  period.metric_chars = period.metric_chars + len
   period.hit_count = period.hit_count + hit_count
   period.final_code_length = period.final_code_length + code_length
   period.backspace_count = period.backspace_count + backspace_count
   if metrics.manual then
     period.manual_commit_count = period.manual_commit_count + 1
+    if metrics.space then
+      period.space_commit_count = period.space_commit_count + 1
+    end
   else
     period.auto_commit_count = period.auto_commit_count + 1
   end
@@ -651,56 +831,76 @@ local function update_period_commit(period, len, metrics)
   end
 end
 
-local function update_peak_windows(current_ms)
-  local first = 1
-  while first <= #state.session_samples
-    and current_ms - state.session_samples[first].time_ms > PEAK_WINDOW_MS do
-    first = first + 1
+local function sample_matches_period(date, reference, period_name)
+  if period_name == "daily" then
+    return same_day(date, reference)
+  elseif period_name == "weekly" then
+    return same_week(date, reference)
+  elseif period_name == "monthly" then
+    return same_month(date, reference)
+  elseif period_name == "yearly" then
+    return same_year(date, reference)
   end
-  if first > 1 then
-    for _ = 1, first - 1 do
-      table.remove(state.session_samples, 1)
-    end
-  end
-  if #state.session_samples < 2 then
-    return
-  end
+  return true
+end
 
-  local oldest = state.session_samples[1]
-  local duration_ms = current_ms - oldest.time_ms
-  if duration_ms < PEAK_WINDOW_MS then
-    return
-  end
-
+local function update_period_peak(period, period_name, reference)
+  local duration_ms = 0
   local chars = 0
   local hits = 0
   local code_length = 0
-  for _, sample in ipairs(state.session_samples) do
+  for index = #state.session_samples, 1, -1 do
+    local sample = state.session_samples[index]
+    if not sample_matches_period(sample.date, reference, period_name) then
+      break
+    end
+    duration_ms = duration_ms + sample.duration_ms
     chars = chars + sample.chars
     hits = hits + sample.hit_count
     code_length = code_length + sample.code_length
+    if duration_ms >= PEAK_WINDOW_MS then
+      break
+    end
   end
-  if chars <= 0 then
+  if duration_ms < PEAK_WINDOW_MS or chars <= 0 then
     return
   end
 
   local speed = chars / (duration_ms / 1000.0) * 60
   local hit = hits / (duration_ms / 1000.0)
   local avg_code_length = code_length / chars
-  for _, period in pairs({
-    state.stats.daily,
-    state.stats.weekly,
-    state.stats.monthly,
-    state.stats.yearly,
-    state.stats.total,
+  if speed > (period.peak.speed or 0) then
+    period.peak = {
+      speed = speed,
+      hit = hit,
+      code_length = avg_code_length,
+    }
+  end
+end
+
+update_peak_windows = function()
+  local reference = state.stats.last_update or os.date("*t", now_sec())
+  for _, item in ipairs({
+    { period = state.stats.daily, name = "daily" },
+    { period = state.stats.weekly, name = "weekly" },
+    { period = state.stats.monthly, name = "monthly" },
+    { period = state.stats.yearly, name = "yearly" },
+    { period = state.stats.total, name = "total" },
   }) do
-    if speed > (period.peak.speed or 0) then
-      period.peak = {
-        speed = speed,
-        hit = hit,
-        code_length = avg_code_length,
-      }
+    update_period_peak(item.period, item.name, reference)
+  end
+
+  local duration_ms = 0
+  local keep_from = #state.session_samples
+  for index = #state.session_samples, 1, -1 do
+    duration_ms = duration_ms + state.session_samples[index].duration_ms
+    keep_from = index
+    if duration_ms >= PEAK_WINDOW_MS then
+      break
     end
+  end
+  for _ = 1, keep_from - 1 do
+    table.remove(state.session_samples, 1)
   end
 end
 
@@ -723,16 +923,20 @@ local function record_commit(text, env, input_start_ms, metrics)
   end
 
   metrics = metrics or state.pending_metrics or {}
-  update_date_stats()
   local current_ms = now_ms()
+  local current_date = os.date("*t", now_sec())
   local start_ms = input_start_ms or metrics.input_start_ms or current_ms
   if start_ms > current_ms then
     start_ms = current_ms
   end
-  if not state.session_active or current_ms - state.last_commit_ms > SESSION_TIMEOUT_MS then
-    if state.session_active then
-      finish_session()
-    end
+  local date_changed = state.stats.last_update
+    and not same_day(current_date, state.stats.last_update)
+  if state.session_active
+      and (date_changed or current_ms - state.last_commit_ms > SESSION_TIMEOUT_MS) then
+    finish_session()
+  end
+  update_date_stats(current_date)
+  if not state.session_active then
     start_session(start_ms)
   elseif start_ms < state.session_start_ms then
     state.session_start_ms = start_ms
@@ -746,6 +950,7 @@ local function record_commit(text, env, input_start_ms, metrics)
     hit_count = non_negative_number(metrics.hit_count),
     backspace_count = non_negative_number(metrics.backspace_count),
     manual = metrics.manual and true or false,
+    space = metrics.space and true or false,
   }
   for _, period in pairs({
     state.stats.daily,
@@ -760,13 +965,6 @@ local function record_commit(text, env, input_start_ms, metrics)
   state.session_chars = state.session_chars + len
   state.session_hit_count = state.session_hit_count + commit_metrics.hit_count
   state.session_code_length = state.session_code_length + commit_metrics.code_length
-  state.session_samples[#state.session_samples + 1] = {
-    time_ms = current_ms,
-    chars = len,
-    hit_count = commit_metrics.hit_count,
-    code_length = commit_metrics.code_length,
-  }
-  update_peak_windows(current_ms)
   state.last_commit_ms = current_ms
   clear_pending_input()
   mark_dirty()
@@ -797,14 +995,15 @@ local function speed_summary()
   return "当前速度：0字/分钟", "字数：0　时间：0.0秒"
 end
 
-local function period_summary(label, period)
-  return string.format("%s输入：%s字", label, format_number(period.chars)),
-    string.format("平均速度：%d字/分钟　输入时长：%s", avg_speed(period), format_duration(period.seconds))
-end
-
 local function period_with_active_seconds(period)
   local view = normalize_period(period)
-  view.seconds = view.seconds + active_session_seconds()
+  local seconds = active_session_seconds()
+  if seconds * 1000 >= MIN_SESSION_MS then
+    view.seconds = view.seconds + seconds
+    view.speed_seconds = view.speed_seconds + seconds
+    view.speed_chars = view.speed_chars + state.session_chars
+    view.speed_hit_count = view.speed_hit_count + state.session_hit_count
+  end
   return view
 end
 
@@ -814,10 +1013,6 @@ end
 
 local function format_percent(number, digits)
   return format_decimal(number, digits or 1) .. "%"
-end
-
-local function format_integer_percent(number)
-  return string.format("%d%%", math.floor((number or 0) + 0.5))
 end
 
 local function progress_bar(percent)
@@ -831,7 +1026,7 @@ local function distribution_row(label, count, total)
 end
 
 local function word_distribution(period)
-  local total = period.commits or 0
+  local total = period.metric_commits or 0
   local long_count = 0
   for length, count in pairs(period.lengths or {}) do
     if tonumber(length) >= 5 then
@@ -848,7 +1043,7 @@ local function word_distribution(period)
 end
 
 local function code_distribution(period)
-  local total = period.commits or 0
+  local total = period.metric_commits or 0
   local other_count = 0
   for length, count in pairs(period.code_lengths or {}) do
     if tonumber(length) < 1 or tonumber(length) > 4 then
@@ -868,12 +1063,13 @@ local function compact_report(label, period)
   local metrics = period_metrics(period)
   local peak_speed = math.floor((period.peak.speed or 0) + 0.5)
   return table.concat({
-    string.format("%s统计：上屏 %s 次 · 字数 %s", label, format_number(period.commits), format_number(period.chars)),
+    string.format("%s统计：上屏 %s 次 · 字数 %s", label,
+      format_number(period.metric_commits), format_number(period.metric_chars)),
     string.format("均速 %d · 峰速 %d", avg_speed(period), peak_speed),
     string.format("击键 %s · 码长 %s · 打词率 %s", format_decimal(metrics.hit, 2),
       format_decimal(metrics.code_length, 2), format_percent(metrics.word_rate, 1)),
-    string.format("空格 %s · 顶屏 %s", format_integer_percent(metrics.manual_rate),
-      format_integer_percent(metrics.auto_rate)),
+    string.format("空格 %s 次 · 顶屏 %s 次", format_number(period.space_commit_count),
+      format_number(period.auto_commit_count)),
     string.format("回改 %s 次 · 回改率 %s", format_number(period.backspace_count),
       format_percent(metrics.backspace_rate, 1)),
   }, "\n")
@@ -886,14 +1082,14 @@ local function detail_report(label, period)
     string.format("※ %s统计 · 效率仪表盘", label),
     "───────────────",
     "📊 综合数据",
-    string.format("均速 %d    上屏 %s", avg_speed(period), format_number(period.commits)),
-    string.format("峰速 %d    字数 %s", peak_speed, format_number(period.chars)),
+    string.format("均速 %d    上屏 %s", avg_speed(period), format_number(period.metric_commits)),
+    string.format("峰速 %d    字数 %s", peak_speed, format_number(period.metric_chars)),
     "",
     "⚡ 核心效率",
     string.format("击键 %s    码长 %s", format_decimal(metrics.hit, 2), format_decimal(metrics.code_length, 2)),
     string.format("打词率 %s", format_percent(metrics.word_rate, 1)),
-    string.format("空格 %s · 顶屏 %s", format_integer_percent(metrics.manual_rate),
-      format_integer_percent(metrics.auto_rate)),
+    string.format("空格 %s 次 · 顶屏 %s 次", format_number(period.space_commit_count),
+      format_number(period.auto_commit_count)),
     string.format("回改 %s 次 · 回改率 %s", format_number(period.backspace_count),
       format_percent(metrics.backspace_rate, 1)),
     "",
@@ -907,12 +1103,18 @@ end
 
 local function brief_summary()
   maybe_finish_idle_session()
+  if state.session_active then
+    finish_session()
+  end
   update_date_stats()
   return compact_report("今日", period_with_active_seconds(state.stats.daily))
 end
 
 local function detail_summaries()
   maybe_finish_idle_session()
+  if state.session_active then
+    finish_session()
+  end
   update_date_stats()
   local s = state.stats
   local rows = {}
@@ -1087,9 +1289,15 @@ local function ensure_pending_metrics()
       hit_count = 0,
       backspace_count = 0,
       manual = false,
+      space = false,
     }
   end
   return state.pending_metrics
+end
+
+local function has_active_composition(input)
+  return (type(input) == "string" and input ~= "")
+    or (type(state.pending_input) == "string" and state.pending_input ~= "")
 end
 
 local function record_key(keycode, env)
@@ -1111,13 +1319,17 @@ local function record_key(keycode, env)
     if state.pending_input_start_ms == nil then
       state.pending_input_start_ms = now_ms()
     end
-  elseif keycode == KEY_BACKSPACE then
+  elseif keycode == KEY_BACKSPACE and has_active_composition(input) then
     local metrics = ensure_pending_metrics()
     metrics.backspace_count = metrics.backspace_count + 1
   elseif keycode == KEY_ESCAPE then
     clear_pending_input()
-  elseif is_manual_commit_key(keycode) then
-    ensure_pending_metrics().manual = true
+  elseif is_manual_commit_key(keycode) and has_active_composition(input) then
+    local metrics = ensure_pending_metrics()
+    metrics.manual = true
+    if keycode == KEY_SPACE then
+      metrics.space = true
+    end
   end
 end
 

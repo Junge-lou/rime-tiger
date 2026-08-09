@@ -53,11 +53,15 @@ behavior.
 
 ## Selection Behavior
 
-When enabled on the first candidate page:
+When enabled and the current selection is still on the first candidate page:
 
 - `;` selects the second normal text candidate;
 - `'` selects the third normal text candidate;
 - candidates beginning with emoji or symbols are skipped;
+- scanning starts with the configured page size, then prepares 32 more
+  candidates at a time until the requested text candidate is found;
+- scanning stops after 512 candidates so an abnormal candidate stream cannot
+  introduce unbounded key latency;
 - Han text and ASCII letters count as normal text candidates;
 - ASCII digits count unless the candidate is a `simplified` association, which
   covers keycap emoji such as `1️⃣`;

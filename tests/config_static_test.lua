@@ -116,6 +116,8 @@ local function test_smart_candidate_selection_configuration()
   assert_contains(example, "smart_candidate_selection/enabled: true", "custom example documents the setting")
   assert_contains(example, "跳过 emoji/符号联想", "custom example explains enabled behavior")
   assert_contains(guide, "smart_candidate_selection/enabled: false", "guide documents how to disable smart selection")
+  assert_contains(guide, "后续候选", "guide explains that smart selection scans beyond the first page")
+  assert_contains(guide, "最多检查 512 项", "guide documents the bounded candidate scan")
   assert_contains(guide, "反斜杠符号菜单", "guide preserves explicit symbol menus")
   assert_contains(guide, "重新部署", "guide states how static setting changes take effect")
 end
