@@ -125,6 +125,7 @@ engine:
     - lua_filter@*mars  # 火星文滤镜
     - lua_filter@charset_comment_filter  # Unicode 分区提示
     - lua_filter@lua_unicode_display_filter  # Unicode 编码显示
+    - lua_filter@*candidate_shadow_filter  # 多滤镜候选压成单层，避免拼音叠加后满码不能顶屏
     - uniquifier  # 去重
 
 

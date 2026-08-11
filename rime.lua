@@ -1,4 +1,5 @@
 charset_comment_filter = require("charset_comment_filter") --Unicode分区提示
+candidate_shadow_filter = require("candidate_shadow_filter") --多滤镜候选压成单层，保留满码顶屏
 number_translator = require("number")
 lua_unicode_display_filter = require("unicode_display")  --Unicode编码提示
 calculator_translator = require("calculator_translator")  --简易计算器

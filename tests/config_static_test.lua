@@ -91,6 +91,8 @@ end
 
 local function test_base_schema_has_filter_switch_and_binding()
   local text = read("tiger_base.schema.yaml")
+  local rime = read("rime.lua")
+  local example = read("配置说明/示例.schema.yaml")
   assert_not_contains(text, legacy_full_name("tiger"), "base schema must not mention old tiger variant")
   assert_not_contains(text, legacy_full_name("tigress"), "base schema must not mention old tigress variant")
   assert_contains(text, "- core2022", "base depends on core2022")
@@ -99,6 +101,11 @@ local function test_base_schema_has_filter_switch_and_binding()
   assert_contains(text, "states: [ 常用字, \"全字集 Ctrl+H\" ]", "extended_char defaults to common mode without reset")
   assert_contains(text, "lua_filter@*core2022_filter", "base includes core2022 filter")
   assert_order(text, "lua_filter@*core2022_filter", "simplifier@simplification", "base filters before simplification")
+  assert_contains(rime, "candidate_shadow_filter = require(\"candidate_shadow_filter\")", "rime registers candidate shadow filter")
+  assert_contains(text, "lua_filter@*candidate_shadow_filter", "base flattens nested shadow candidates")
+  assert_order(text, "lua_filter@*candidate_shadow_filter", "uniquifier", "shadow flattening runs before uniquifier")
+  assert_contains(example, "lua_filter@*candidate_shadow_filter", "schema example flattens nested shadow candidates")
+  assert_order(example, "lua_filter@*candidate_shadow_filter", "uniquifier", "schema example flattens before uniquifier")
   assert_contains(text, "toggle: extended_char", "base binds extended_char toggle")
 end
 
