@@ -709,6 +709,93 @@ local function update_prompt(env)
     end
 end
 
+local function composition_segments(ctx)
+    local comp = ctx.composition
+    if not comp or comp:empty() then
+        return {}
+    end
+    if comp.toSegmentation then
+        local ok, segmentation = pcall(function()
+            return comp:toSegmentation()
+        end)
+        if ok and segmentation and segmentation.get_segments then
+            local segments_ok, segments = pcall(function()
+                return segmentation:get_segments()
+            end)
+            if segments_ok and segments then
+                return segments
+            end
+        end
+    end
+    return { comp:back() }
+end
+
+local function segment_start(seg)
+    return seg and (seg._start or seg.start) or 0
+end
+
+local function segment_end(seg)
+    return seg and (seg._end or seg["end"]) or segment_start(seg)
+end
+
+local function is_selected_segment(seg)
+    return seg and (seg.status == "kSelected" or seg.status == "kConfirmed")
+end
+
+local function segment_selected_candidate(seg)
+    if not seg then
+        return nil
+    end
+    if seg.get_selected_candidate then
+        local ok, cand = pcall(function()
+            return seg:get_selected_candidate()
+        end)
+        if ok then
+            return cand
+        end
+    end
+    if seg.menu then
+        return seg.menu:get_candidate_at(seg.selected_index or 0)
+    end
+    return nil
+end
+
+local function sync_native_capture(env)
+    local capture = get_capture(env.engine)
+    if not capture or not capture.native_started then
+        return false
+    end
+
+    local ctx = env.engine.context
+    local input_length = #(ctx.input or "")
+    if input_length < (capture.native_input_length or 0) then
+        capture.native_confirmed_end = 0
+    end
+    capture.native_input_length = input_length
+    local confirmed_end = capture.native_confirmed_end or 0
+    local query = ""
+    local changed = false
+    for _, seg in ipairs(composition_segments(ctx)) do
+        local start_pos = segment_start(seg)
+        local end_pos = segment_end(seg)
+        if is_selected_segment(seg) and end_pos > confirmed_end then
+            local cand = segment_selected_candidate(seg)
+            local text = genuine_text(cand)
+            if text ~= "" and not is_status_candidate(cand) then
+                capture.text = capture.text .. text
+                capture.native_confirmed_end = end_pos
+                confirmed_end = end_pos
+                changed = true
+            end
+        elseif not is_selected_segment(seg) and end_pos > start_pos then
+            query = (ctx.input or ""):sub(start_pos + 1, end_pos)
+        end
+    end
+    capture.query = query
+    update_prompt(env)
+    return changed
+end
+
 local function refresh_context(ctx)
     if ctx.refresh_non_confirmed_composition then
         ctx:refresh_non_confirmed_composition()
@@ -722,8 +809,13 @@ local function show_capture_context(env)
     end
     local ctx = env.engine.context
     local query = capture.query or ""
+    capture.native_started = false
+    capture.native_confirmed_end = 0
+    capture.native_input_length = 0
     ctx:clear()
     ctx.input = query ~= "" and query or capture.code
+    capture.query = query
+    capture.native_started = query ~= ""
     refresh_context(ctx)
     update_prompt(env)
 end
@@ -732,6 +824,9 @@ local function clear_capture(env)
     local capture = get_capture(env.engine)
     if capture then
         env.engine.context:set_option("ascii_mode", capture.original_ascii_mode)
+        if capture.original_auto_commit ~= nil then
+            env.engine.context:set_option("_auto_commit", capture.original_auto_commit)
+        end
     end
     clear_engine_capture(env.engine)
 end
@@ -748,9 +843,16 @@ local function enter_capture(env, operation, default_text, target_code)
         operation = operation or "add",
         message = "",
         original_ascii_mode = env.engine.context:get_option("ascii_mode"),
+        original_auto_commit = env.engine.context:get_option("_auto_commit"),
         shift_key = nil,
         shift_used = false,
+        native_started = false,
+        native_confirmed_end = 0,
+        native_input_length = 0,
     })
+    if get_capture(env.engine).original_auto_commit then
+        env.engine.context:set_option("_auto_commit", false)
+    end
     show_capture_context(env)
     return true
 end
@@ -1029,7 +1131,10 @@ local function management_code(env)
 end
 
 local function set_management_code(env, code)
-    env.engine.context:set_property(management_code_property, code or "")
+    local next_code = code or ""
+    if management_code(env) ~= next_code then
+        env.engine.context:set_property(management_code_property, next_code)
+    end
 end
 
 local function is_management_shortcut(key_event)
@@ -1077,10 +1182,18 @@ function processor.init(env)
     local config = env.engine.schema.config
     env.select_keys = config and config.get_string
         and config:get_string("menu/alternative_select_keys") or "1234567890"
+    if Component and Component.Processor then
+        local ok, speller = pcall(Component.Processor, env.engine, "", "speller")
+        if ok then
+            env.capture_speller = speller
+        end
+    end
     env.update_notifier = env.engine.context.update_notifier:connect(function()
+        sync_native_capture(env)
         update_prompt(env)
     end)
     env.select_notifier = env.engine.context.select_notifier:connect(function()
+        sync_native_capture(env)
         update_prompt(env)
     end)
     if env.engine.context.commit_notifier then
@@ -1173,10 +1286,38 @@ function processor.func(key_event, env)
         if action == "select" then
             capture_selection(env, keycode)
             return kAccepted
+        elseif not ctx:get_option("ascii_mode") and not env.capture_speller
+            and not key_event:shift() and capture_input.is_printable_keysym(keycode) then
+            capture.message = "当前环境不支持原生取词"
+            refresh_context(ctx)
+            update_prompt(env)
+            return kAccepted
+        elseif not ctx:get_option("ascii_mode") and env.capture_speller
+            and not key_event:shift() and capture_input.is_printable_keysym(keycode) then
+            local started_here = not capture.native_started
+            if started_here then
+                capture.native_confirmed_end = 0
+                capture.query = ""
+                ctx:clear()
+                capture.native_started = true
+            end
+            local result = env.capture_speller:process_key_event(key_event)
+            if result == kAccepted then
+                capture.message = ""
+                sync_native_capture(env)
+                return kAccepted
+            end
+            if started_here then
+                show_capture_context(env)
+            end
+            if action == "query" then
+                return kAccepted
+            end
         elseif action == "query" then
             append_capture_input(env, ch)
             return kAccepted
-        elseif action == "literal" then
+        end
+        if action == "literal" then
             append_capture_text(env, capture_input.literal_char(
                 capture.text,
                 ch,
@@ -1329,7 +1470,9 @@ function filter.func(input, env)
     end
 
     local capture = get_capture(env.engine)
-    if capture and (not capture.query or capture.query == "") then
+    local native_query_pending = capture and capture.native_started
+        and (capture.native_confirmed_end or 0) < #(env.engine.context.input or "")
+    if capture and not native_query_pending and (not capture.query or capture.query == "") then
         yield(capture_status_candidate(env, capture))
         return
     end

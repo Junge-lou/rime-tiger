@@ -124,6 +124,26 @@ local function notifier()
   return source
 end
 
+Component = {
+  Processor = function(engine, _, component_name)
+    assert(component_name == "speller")
+    return {
+      process_key_event = function(_, key_event)
+        local accepted_keys = engine.context.native_speller_keys or "abcdefghijklmnopqrstuvwxyz"
+        local char = key_event.keycode >= 0x20 and key_event.keycode <= 0x7e
+          and string.char(key_event.keycode) or ""
+        if not accepted_keys:find(char, 1, true) then
+          return 2
+        end
+        engine.context.native_speller_call_count =
+          (engine.context.native_speller_call_count or 0) + 1
+        engine.context:push_input(char)
+        return 1
+      end,
+    }
+  end,
+}
+
 local function new_init_env(schema_id)
   local properties = {}
   local options = {
@@ -141,6 +161,7 @@ local function new_init_env(schema_id)
   end
   function context:set_property(name, value)
     properties[name] = value
+    self.property_write_count = (self.property_write_count or 0) + 1
   end
   function context:get_option(name)
     return options[name] or false
@@ -216,13 +237,27 @@ local function new_runtime_env(schema_id, input, candidate_texts, selected_index
   local context = env.engine.context
   context.input = input
   context.refresh_count = 0
+  context.native_segments = nil
   context.composition = {
     empty = function()
+      if context.native_segments then
+        return #context.native_segments == 0
+      end
       return context.input == ""
     end,
     back = function()
+      if context.native_segments then
+        return context.native_segments[#context.native_segments]
+      end
       segment._end = #context.input
       return segment
+    end,
+    toSegmentation = function()
+      return {
+        get_segments = function()
+          return context.native_segments or { segment }
+        end,
+      }
     end,
   }
   function context:push_input(text)
@@ -239,6 +274,9 @@ local function new_runtime_env(schema_id, input, candidate_texts, selected_index
   end
   function context:get_selected_candidate()
     return candidates[segment.selected_index + 1]
+  end
+  function segment:get_selected_candidate()
+    return candidates[self.selected_index + 1]
   end
   env.engine.context = context
   env.segment = segment
@@ -472,6 +510,11 @@ do
 
   assert(words.processor.func(plain_key(0xff1b), env) == 2)
   assert(env.engine.context:get_property("tiger_user_words_management_code") == "")
+
+  local writes_before_idle_commit = env.engine.context.property_write_count or 0
+  env.engine.context.commit_notifier.callback()
+  assert((env.engine.context.property_write_count or 0) == writes_before_idle_commit,
+    "ordinary commits must not rewrite an already-empty management property")
 
   assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), env) == 1)
   env.engine.context.commit_notifier.callback()
@@ -718,6 +761,159 @@ runtime_case("Chinese literal and genuine candidate flow", function()
   assert(words.processor.func(plain_key(0x32), env) == 1)
   assert(capture.text == "X4真实候选第二候选" and capture.query == "")
   words.processor.func(plain_key(0xff1b), env)
+end)
+
+runtime_case("native speller selection continues into the next query", function()
+  local env = new_runtime_env("tiger", "native", {})
+  words.processor.init(env)
+  start_capture(env)
+  local capture = capture_of(env)
+
+  assert(words.processor.func(plain_key(0x61), env) == 1)
+  assert(env.engine.context.native_speller_call_count == 1,
+    "Chinese spelling keys must be handled by the active schema speller")
+
+  local selected = {
+    _start = 0,
+    _end = 4,
+    status = "kSelected",
+    get_selected_candidate = function()
+      return candidate({ display = "转换字", genuine = "真字" })
+    end,
+  }
+  env.engine.context.input = "abcd"
+  env.engine.context.native_segments = { selected }
+  env.engine.context.select_notifier.callback()
+  assert(capture.text == "真字" and capture.query == "")
+
+  local guessing = {
+    _start = 4,
+    _end = 5,
+    status = "kGuess",
+    get_selected_candidate = function() return candidate("下一字") end,
+  }
+  env.engine.context.input = "abcde"
+  env.engine.context.native_segments = { selected, guessing }
+  env.engine.context.update_notifier.callback()
+  assert(capture.text == "真字" and capture.query == "e",
+    "the fifth key must remain in the native speller's next segment")
+
+  env.engine.context.select_notifier.callback()
+  assert(capture.text == "真字", "repeated native notifications must not duplicate text")
+  assert(env.engine.context.commit_count == nil, "capture must not commit to the application")
+end)
+
+runtime_case("native speller decides the schema alphabet", function()
+  local env = new_runtime_env("tiger", "alphabet", {})
+  env.engine.context.native_speller_keys = ";"
+  words.processor.init(env)
+  start_capture(env)
+
+  assert(words.processor.func(plain_key(0x3b), env) == 1)
+  assert(env.engine.context.native_speller_call_count == 1)
+  assert(capture_of(env).query == ";")
+end)
+
+runtime_case("native speller first key sees real candidates", function()
+  local env = new_runtime_env("tiger", "firstkey", {})
+  words.processor.init(env)
+  words.filter.init(env)
+  start_capture(env)
+  local capture = capture_of(env)
+  capture.native_started = true
+  capture.query = ""
+  env.engine.context.input = "a"
+
+  local output = filter_output(env, candidate_input({ "首键候选" }))
+  assert(#output == 1 and output[1].text == "首键候选",
+    "the first native speller update must not be replaced by capture status")
+end)
+
+runtime_case("native unique selection returns to capture status", function()
+  local env = new_runtime_env("tiger", "unique", {})
+  words.processor.init(env)
+  words.filter.init(env)
+  start_capture(env)
+  local capture = capture_of(env)
+  capture.native_started = true
+  capture.native_confirmed_end = 1
+  capture.query = ""
+  capture.text = "唯一字"
+  env.engine.context.input = "a"
+
+  local output = filter_output(env, candidate_input({ "不应显示" }))
+  assert(#output == 1 and output[1].type == "tiger_user_status")
+  assert(output[1].text:find("唯一字", 1, true))
+end)
+
+runtime_case("native speller auto clear resets segment offsets", function()
+  local env = new_runtime_env("tiger", "clearoffset", {})
+  words.processor.init(env)
+  start_capture(env)
+  local capture = capture_of(env)
+  capture.native_started = true
+  capture.native_confirmed_end = 4
+  capture.native_input_length = 4
+  capture.text = "前字"
+
+  env.engine.context.input = ""
+  env.engine.context.native_segments = {}
+  env.engine.context.update_notifier.callback()
+  assert(capture.native_confirmed_end == 0,
+    "native speller clearing its context must reset the segment offset baseline")
+
+  local selected = {
+    _start = 0,
+    _end = 2,
+    status = "kConfirmed",
+    get_selected_candidate = function() return candidate("后字") end,
+  }
+  env.engine.context.input = "ef"
+  env.engine.context.native_segments = { selected }
+  env.engine.context.select_notifier.callback()
+  assert(capture.text == "前字后字")
+end)
+
+runtime_case("rejected native first key restores capture context", function()
+  local env = new_runtime_env("tiger", "reject", {})
+  env.engine.context.native_speller_keys = ";"
+  words.processor.init(env)
+  words.filter.init(env)
+  start_capture(env)
+
+  assert(words.processor.func(plain_key(0x61), env) == 1)
+  local capture = capture_of(env)
+  assert(capture.native_started == false and capture.query == "")
+  assert(env.engine.context.input == "reject")
+  assert(filter_output(env)[1].type == "tiger_user_status")
+end)
+
+runtime_case("missing native speller never falls back to Lua query", function()
+  local env = new_runtime_env("tiger", "nospeller", {})
+  words.processor.init(env)
+  env.capture_speller = nil
+  words.filter.init(env)
+  start_capture(env)
+
+  assert(words.processor.func(plain_key(0x61), env) == 1)
+  local capture = capture_of(env)
+  assert(capture.query == "" and capture.native_started == false)
+  assert(capture.message == "当前环境不支持原生取词")
+  assert(filter_output(env)[1].comment == capture.message)
+
+  capture.message = ""
+  assert(words.processor.func(plain_key(0x3b), env) == 1)
+  assert(capture.text == "" and capture.message == "当前环境不支持原生取词")
+end)
+
+runtime_case("capture temporarily disables native auto commit", function()
+  local env = new_runtime_env("tiger", "autocommit", {})
+  env.engine.context:set_option("_auto_commit", true)
+  words.processor.init(env)
+  start_capture(env)
+  assert(env.engine.context:get_option("_auto_commit") == false)
+  assert(words.processor.func(plain_key(0xff1b), env) == 1)
+  assert(env.engine.context:get_option("_auto_commit") == true)
 end)
 
 runtime_case("Chinese keypad and punctuation conversion", function()
