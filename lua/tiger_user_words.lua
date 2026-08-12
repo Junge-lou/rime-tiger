@@ -2,8 +2,8 @@
 -- Runtime candidate management for the Tiger family schemas.
 --
 -- Shortcuts:
---   Ctrl+;           enter word capture
---   Ctrl+'           block current candidate, or enter block capture
+--   target code + \\ + Space enters word capture
+--   Shift+Delete or Ctrl+Delete hides the selected candidate
 --   Return           confirm word capture
 --   Ctrl+arrows      move current candidate in the visible candidate page
 --   Ctrl+Option+arrows is the macOS-friendly alternative
@@ -89,34 +89,49 @@ local function parse_db_record(value)
     if fields.v ~= DB_VERSION then
         return nil
     end
+    local legacy_ordered = fields.o == nil and fields.a ~= 1 and fields.h ~= 1
+        and fields.w ~= nil and fields.w ~= 0
     return {
         added = fields.a == 1,
         hidden = fields.h == 1,
         weight = fields.w,
         updated_at = fields.t or 0,
+        source = fields.s == 1 and "shortcut" or nil,
+        ordered = fields.o == 1 or legacy_ordered,
     }
 end
 
 local function encode_db_record(record)
     return string.format(
-        "v=%d a=%d h=%d w=%d t=%d",
+        "v=%d a=%d h=%d w=%d t=%d s=%d o=%d",
         DB_VERSION,
         record.added and 1 or 0,
         record.hidden and 1 or 0,
         record.weight or 0,
-        record.updated_at or 0
+        record.updated_at or 0,
+        record.source == "shortcut" and 1 or 0,
+        record.ordered and 1 or 0
     )
 end
 
 local function copy_db_record(record)
     if not record then
-        return { added = false, hidden = false, weight = nil, updated_at = 0 }
+        return {
+            added = false,
+            hidden = false,
+            weight = nil,
+            updated_at = 0,
+            source = nil,
+            ordered = false,
+        }
     end
     return {
         added = record.added,
         hidden = record.hidden,
         weight = record.weight,
         updated_at = record.updated_at,
+        source = record.source,
+        ordered = record.ordered,
     }
 end
 
@@ -159,10 +174,10 @@ end
 function Store:query(code)
     local records = {}
     local prefix = code .. DB_SEPARATOR
-    local ok = pcall(function()
+    local ok, available = pcall(function()
         local accessor = self.pool.db:query(prefix)
         if not accessor then
-            return
+            return false
         end
         for key, value in accessor:iter() do
             local record = parse_db_record(value)
@@ -170,8 +185,9 @@ function Store:query(code)
                 records[key:sub(1 + #prefix)] = record
             end
         end
+        return true
     end)
-    return ok and records or nil
+    return ok and available and records or nil
 end
 
 function Store:list_all()
@@ -245,9 +261,12 @@ end
 
 local shared_states = {}
 local capture_sessions = {}
+local restore_hidden
+local reset_code
 local capture_token_counter = 0
 local capture_token_prefix = "tiger_user_words:" .. tostring(capture_sessions) .. ":"
 local capture_token_property = "tiger_user_words_capture_token"
+local management_code_property = "tiger_user_words_management_code"
 
 local function capture_token(engine, create)
     local context = engine.context
@@ -297,6 +316,7 @@ local KEY = {
     MINUS = 0x2d,
     EQUAL = 0x3d,
     SEMICOLON = 0x3b,
+    DELETE = 0xffff,
 }
 
 local function pathsep()
@@ -337,6 +357,7 @@ local function ensure_code(state, code)
     state.added[code] = state.added[code] or {}
     state.blocked[code] = state.blocked[code] or {}
     state.weights[code] = state.weights[code] or {}
+    state.ordered[code] = state.ordered[code] or {}
 end
 
 local function set_added(state, code, text, weight)
@@ -475,11 +496,15 @@ local function load_state(profile)
         added = {},
         blocked = {},
         weights = {},
+        ordered = {},
         generated_loaded = false,
     }
 
+    local database_records = {}
     if store then
         for _, item in ipairs(store:list_all() or {}) do
+            database_records[item.code] = database_records[item.code] or {}
+            database_records[item.code][item.text] = true
             if item.record.added then
                 set_added(state, item.code, item.text, item.record.weight or profile.weight_base)
             end
@@ -489,6 +514,10 @@ local function load_state(profile)
             end
             if item.record.hidden then
                 set_blocked(state, item.code, item.text)
+            end
+            if item.record.ordered then
+                ensure_code(state, item.code)
+                state.ordered[item.code][item.text] = true
             end
         end
     end
@@ -505,7 +534,9 @@ local function load_state(profile)
                 in_generated = false
             else
                 local marker = parse_marker(line)
-                if marker then
+                local marker_in_database = marker and database_records[marker.code]
+                    and database_records[marker.code][marker.text]
+                if marker and not marker_in_database then
                     if marker.op == "disabled" then
                         set_blocked(state, marker.code, marker.text)
                     elseif marker.op == "enabled" then
@@ -513,7 +544,9 @@ local function load_state(profile)
                     end
                 elseif in_generated then
                     local entry = parse_entry(profile, filename, line)
-                    if entry then
+                    local entry_in_database = entry and entry.code and database_records[entry.code]
+                        and database_records[entry.code][entry.text]
+                    if entry and not entry_in_database then
                         set_added(state, entry.code, entry.text, entry.weight)
                     end
                 end
@@ -559,7 +592,7 @@ local function persist_disable(state, code, text)
     return true
 end
 
-local function persist_weight(state, code, text, weight)
+local function persist_weight(state, code, text, weight, options)
     if not state.store then
         return false
     end
@@ -568,14 +601,29 @@ local function persist_weight(state, code, text, weight)
         return false
     end
     local record = copy_db_record(records[text])
-    record.added = true
+    options = options or {}
+    if options.added ~= nil then
+        record.added = options.added
+    end
     record.hidden = false
     record.weight = weight
     record.updated_at = os.time()
+    if options.source ~= nil then
+        record.source = options.source
+    end
+    if options.ordered ~= nil then
+        record.ordered = options.ordered
+    end
     if not state.store:write(code, text, record) then
         return false
     end
-    set_added(state, code, text, weight)
+    if record.added then
+        set_added(state, code, text, weight)
+    else
+        ensure_code(state, code)
+        state.weights[code][text] = weight
+        state.blocked[code][text] = nil
+    end
     return true
 end
 
@@ -724,7 +772,11 @@ local function finish_capture(env)
         if capture.operation == "disable" then
             return persist_disable(env.state, code, text)
         end
-        return persist_weight(env.state, code, text, env.state.config.weight_base)
+        return persist_weight(env.state, code, text, env.state.config.weight_base, {
+            added = true,
+            source = "shortcut",
+            ordered = false,
+        })
     end)
     if not call_ok or not saved then
         capture.message = "保存失败，请重试"
@@ -851,11 +903,14 @@ local function apply_visible_order(env, items, code)
         record.hidden = false
         record.weight = weight
         record.updated_at = os.time()
+        record.ordered = true
         if not env.state.store:write(code, item.text, record) then
             return false
         end
         env.state.weights[code] = env.state.weights[code] or {}
         env.state.weights[code][item.text] = weight
+        env.state.ordered[code] = env.state.ordered[code] or {}
+        env.state.ordered[code][item.text] = true
     end
     return true
 end
@@ -928,18 +983,68 @@ local function disable_selected(env)
     local code = current_code(env)
     local cand = selected_candidate(env)
     local text = genuine_text(cand)
+    local candidate_type = cand and cand.type or ""
+    if cand and cand.get_genuine then
+        local ok, genuine = pcall(function()
+            return cand:get_genuine()
+        end)
+        if ok and genuine and genuine.type then
+            candidate_type = genuine.type
+        end
+    end
     if code == "" or text == "" then
         return false
     end
-    if not persist_disable(env.state, code, text) then
+    local records = env.state.store and env.state.store:query(code)
+    local existing = records and records[text]
+    if existing and existing.source == "shortcut" and existing.added then
+        local record = copy_db_record(existing)
+        record.added = false
+        record.source = nil
+        record.ordered = false
+        record.weight = 0
+        record.hidden = candidate_type ~= "tiger_user_word"
+        record.updated_at = os.time()
+        if not env.state.store:write(code, text, record) then
+            return false
+        end
+        ensure_code(env.state, code)
+        env.state.added[code][text] = nil
+        env.state.weights[code][text] = nil
+        env.state.ordered[code][text] = nil
+        env.state.blocked[code][text] = record.hidden and true or nil
+    elseif not persist_disable(env.state, code, text) then
         return false
     end
     env.engine.context:refresh_non_confirmed_composition()
+    local seg = current_segment(env)
+    if seg then
+        seg.prompt = "〔已删除「" .. text .. "」；Ctrl+Shift+M 可管理和恢复〕"
+    end
     return true
 end
 
-local function is_ctrl_shortcut(key_event)
-    return key_event:ctrl() and not key_event:alt() and not key_event:shift() and not key_event:release()
+local function management_code(env)
+    return env.engine.context:get_property(management_code_property)
+end
+
+local function set_management_code(env, code)
+    env.engine.context:set_property(management_code_property, code or "")
+end
+
+local function is_management_shortcut(key_event)
+    local keycode = key_event.keycode
+    return key_event:ctrl() and key_event:shift()
+        and not key_event:alt() and not key_event:super() and not key_event:release()
+        and (keycode == 0x4d or keycode == 0x6d)
+end
+
+local function is_delete_shortcut(key_event)
+    if key_event.keycode ~= KEY.DELETE or key_event:release() or key_event:alt() or key_event:super() then
+        return false
+    end
+    return (key_event:shift() and not key_event:ctrl())
+        or (key_event:ctrl() and not key_event:shift())
 end
 
 local function is_reorder_shortcut(key_event)
@@ -978,15 +1083,24 @@ function processor.init(env)
     env.select_notifier = env.engine.context.select_notifier:connect(function()
         update_prompt(env)
     end)
+    if env.engine.context.commit_notifier then
+        env.commit_notifier = env.engine.context.commit_notifier:connect(function()
+            set_management_code(env, "")
+        end)
+    end
 end
 
 function processor.fini(env)
     clear_capture(env)
+    set_management_code(env, "")
     if env.update_notifier then
         env.update_notifier:disconnect()
     end
     if env.select_notifier then
         env.select_notifier:disconnect()
+    end
+    if env.commit_notifier then
+        env.commit_notifier:disconnect()
     end
 end
 
@@ -1085,6 +1199,20 @@ function processor.func(key_event, env)
         return kAccepted
     end
 
+    if is_management_shortcut(key_event) then
+        local code = current_code(env)
+        if code == "" then
+            return kNoop
+        end
+        if management_code(env) == code then
+            set_management_code(env, "")
+        else
+            set_management_code(env, code)
+        end
+        refresh_context(env.engine.context)
+        return kAccepted
+    end
+
     if not key_event:ctrl() and not key_event:alt() and not key_event:shift() and not key_event:release() then
         local ctx = env.engine.context
         if keycode == KEY.BACKSLASH and add_trigger.can_append(ctx.input) then
@@ -1098,12 +1226,56 @@ function processor.func(key_event, env)
         end
     end
 
-    if is_ctrl_shortcut(key_event) then
-        if keycode == KEY.SEMICOLON then
-            return enter_capture(env, "add") and kAccepted or kNoop
-        elseif keycode == KEY.APOSTROPHE then
-            return enter_capture(env, "disable", current_selected_text(env)) and kAccepted or disable_selected(env) and kAccepted or kNoop
+    local managed_code = management_code(env)
+    if managed_code ~= "" and managed_code ~= current_code(env) then
+        set_management_code(env, "")
+        managed_code = ""
+    end
+    if managed_code ~= "" and keycode == KEY.ESCAPE and not key_event:ctrl()
+        and not key_event:alt() and not key_event:shift() and not key_event:super()
+        and not key_event:release() then
+        set_management_code(env, "")
+        return kNoop
+    end
+    if managed_code ~= "" and is_delete_shortcut(key_event) then
+        local text = current_selected_text(env)
+        if restore_hidden(env.state.config.schema_id, managed_code, text) then
+            refresh_context(env.engine.context)
+            return kAccepted
         end
+        local seg = current_segment(env)
+        if seg then
+            seg.prompt = "〔恢复失败：无法写入用户数据〕"
+        end
+        return kAccepted
+    end
+
+    if managed_code ~= "" and key_event:ctrl() and not key_event:shift()
+        and not key_event:alt() and not key_event:super() and not key_event:release()
+        and keycode == 0x30 then
+        local reset, status = reset_code(env.state.config.schema_id, managed_code)
+        if reset and status == "changed" then
+            refresh_context(env.engine.context)
+        elseif not reset and status == "partial" then
+            refresh_context(env.engine.context)
+        end
+        local seg = current_segment(env)
+        if seg then
+            if reset and status == "changed" then
+                seg.prompt = "〔已重置当前编码〕"
+            elseif reset and status == "unchanged" then
+                seg.prompt = "〔当前编码无需重置〕"
+            elseif status == "partial" then
+                seg.prompt = "〔重置未完全完成，已重新加载用户数据〕"
+            else
+                seg.prompt = "〔重置失败：无法写入用户数据〕"
+            end
+        end
+        return kAccepted
+    end
+
+    if is_delete_shortcut(key_event) then
+        return disable_selected(env) and kAccepted or kNoop
     end
 
     if is_reorder_shortcut(key_event) then
@@ -1177,12 +1349,14 @@ function filter.func(input, env)
     end
 
     local state = env.state
+    local managed = management_code(env) == code
     local blocked = state.blocked[code] or {}
     local weights = state.weights[code] or {}
+    local ordered = state.ordered[code] or {}
     local added = state.added[code] or {}
     local has_added_or_weight = next(added) ~= nil or next(weights) ~= nil
 
-    if not has_added_or_weight then
+    if not has_added_or_weight and not managed then
         for cand in input:iter() do
             local text = genuine_text(cand)
             if not is_status_candidate(cand) and not blocked[text] then
@@ -1198,11 +1372,36 @@ function filter.func(input, env)
 
     for cand in input:iter() do
         local text = genuine_text(cand)
-        if not is_status_candidate(cand) and not blocked[text] then
+        if not is_status_candidate(cand) and (not blocked[text] or managed) then
             index = index + 1
             seen[text] = true
+            local output = cand
+            if managed and (blocked[text] or ordered[text]) then
+                local comments = {}
+                if blocked[text] then
+                    table.insert(comments, "已隐藏 · Delete 恢复")
+                end
+                if ordered[text] then
+                    table.insert(comments, "手动调序")
+                end
+                local comment = table.concat(comments, " · ")
+                if ShadowCandidate then
+                    local genuine = cand
+                    if cand.get_genuine then
+                        local ok, resolved = pcall(function()
+                            return cand:get_genuine()
+                        end)
+                        if ok and resolved then
+                            genuine = resolved
+                        end
+                    end
+                    output = ShadowCandidate(genuine, "tiger_user_management", cand.text, comment)
+                else
+                    output = Candidate("tiger_user_management", cand.start or 0, cand._end or #code, cand.text, comment)
+                end
+            end
             table.insert(rows, {
-                cand = cand,
+                cand = output,
                 text = text,
                 index = index,
                 score = candidate_sort_key(state, code, text, 0 - index),
@@ -1224,6 +1423,30 @@ function filter.func(input, env)
                 index = index,
                 score = cand.quality,
             })
+        end
+    end
+
+    if managed then
+        for text, _ in pairs(blocked) do
+            if not seen[text] then
+                index = index + 1
+                local seg = current_segment(env)
+                local start = seg and seg._start or 0
+                local finish = seg and seg._end or #code
+                local cand = Candidate(
+                    "tiger_user_management",
+                    start,
+                    finish,
+                    text,
+                    "已隐藏 · Delete 恢复"
+                )
+                table.insert(rows, {
+                    cand = cand,
+                    text = text,
+                    index = index,
+                    score = candidate_sort_key(state, code, text, 0 - index),
+                })
+            end
         end
     end
 
@@ -1263,15 +1486,181 @@ local function export_snapshot(schema_id)
             added = row.record.added,
             hidden = row.record.hidden,
             weight = row.record.weight,
+            source = row.record.source,
+            ordered = row.record.ordered,
         })
     end
     return snapshot
+end
+
+local function manager_snapshot(schema_id)
+    local profile = PROFILES[schema_id]
+    if not profile then
+        return nil
+    end
+    local db = acquire_db(profile.db_name)
+    if not db then
+        return nil, "用户词数据库不可用"
+    end
+    local rows = db:list_all()
+    if not rows then
+        return nil, "用户词数据库不可用"
+    end
+    local snapshot = {}
+    for _, row in ipairs(rows) do
+        table.insert(snapshot, {
+            code = row.code,
+            text = row.text,
+            added = row.record.added,
+            hidden = row.record.hidden,
+            weight = row.record.weight,
+            source = row.record.source,
+            ordered = row.record.ordered,
+            updated_at = row.record.updated_at,
+        })
+    end
+    return snapshot
+end
+
+local function state_for_schema(schema_id)
+    local profile = PROFILES[schema_id]
+    if not profile then
+        return nil
+    end
+    return get_state(profile)
+end
+
+local function mutate_record(schema_id, code, text, mutate)
+    local state = state_for_schema(schema_id)
+    if not state or not state.store or code == "" or text == "" then
+        return false
+    end
+    local records = state.store:query(code)
+    if not records or not records[text] then
+        return false
+    end
+    local record = copy_db_record(records[text])
+    if mutate(record) == false then
+        return false
+    end
+    record.updated_at = os.time()
+    if not state.store:write(code, text, record) then
+        return false
+    end
+    ensure_code(state, code)
+    state.added[code][text] = record.added and true or nil
+    state.blocked[code][text] = record.hidden and true or nil
+    state.weights[code][text] = record.weight and record.weight ~= 0 and record.weight or nil
+    state.ordered[code][text] = record.ordered and true or nil
+    return true
+end
+
+restore_hidden = function(schema_id, code, text)
+    return mutate_record(schema_id, code, text, function(record)
+        if not record.hidden then
+            return false
+        end
+        record.hidden = false
+    end)
+end
+
+local function clear_order(schema_id, code, text)
+    return mutate_record(schema_id, code, text, function(record)
+        if not record.ordered then
+            return false
+        end
+        record.ordered = false
+        record.weight = record.added and PROFILES[schema_id].weight_base or 0
+    end)
+end
+
+local function remove_shortcut(schema_id, code, text)
+    return mutate_record(schema_id, code, text, function(record)
+        if record.source ~= "shortcut" or not record.added then
+            return false
+        end
+        record.added = false
+        record.source = nil
+        record.ordered = false
+        record.weight = 0
+    end)
+end
+
+reset_code = function(schema_id, code)
+    local state = state_for_schema(schema_id)
+    if not state or not state.store or code == "" then
+        return false, "failed"
+    end
+    local records = state.store:query(code)
+    if not records then
+        return false, "failed"
+    end
+    local changes = {}
+    for text, original in pairs(records) do
+        if original.hidden or original.ordered then
+            local record = copy_db_record(original)
+            record.hidden = false
+            record.ordered = false
+            record.weight = record.added and state.config.weight_base or 0
+            record.updated_at = os.time()
+            table.insert(changes, {
+                text = text,
+                original = copy_db_record(original),
+                updated = record,
+            })
+        end
+    end
+    if #changes == 0 then
+        return true, "unchanged"
+    end
+    table.sort(changes, function(a, b)
+        return a.text < b.text
+    end)
+
+    local applied = {}
+    for _, change in ipairs(changes) do
+        if not state.store:write(code, change.text, change.updated) then
+            local rollback_failed = false
+            for index = #applied, 1, -1 do
+                local rollback = applied[index]
+                if not state.store:write(code, rollback.text, rollback.original) then
+                    rollback_failed = true
+                    log.error("tiger_user_words: failed to roll back reset for " .. code .. "/" .. rollback.text)
+                end
+            end
+            if rollback_failed then
+                local reloaded = load_state(state.config)
+                state.store = reloaded.store
+                state.added = reloaded.added
+                state.blocked = reloaded.blocked
+                state.weights = reloaded.weights
+                state.ordered = reloaded.ordered
+                state.generated_loaded = reloaded.generated_loaded
+                return false, "partial"
+            end
+            return false, "failed"
+        end
+        table.insert(applied, change)
+    end
+
+    ensure_code(state, code)
+    for _, change in ipairs(changes) do
+        state.blocked[code][change.text] = nil
+        state.weights[code][change.text] = change.updated.added and change.updated.weight or nil
+        state.ordered[code][change.text] = nil
+    end
+    return true, "changed"
 end
 
 return {
     processor = processor,
     filter = filter,
     export_snapshot = export_snapshot,
+    manager_snapshot = manager_snapshot,
+    restore_hidden = restore_hidden,
+    clear_order = clear_order,
+    remove_shortcut = remove_shortcut,
+    reset_code = reset_code,
     _test = {
         get_capture = get_capture,
     },

@@ -6,7 +6,7 @@
 # 配置来源：
 #   tiger_base.schema.yaml -> tigress.schema.yaml
 #
-# 本方案启用词库版加词/删词/调序。
+# 本方案启用加词、删词、调序和候选管理。
 # 底层使用全字集词典；常用字/全字集由 extended_char 开关过滤。
 #
 # 修改指南：

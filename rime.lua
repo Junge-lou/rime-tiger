@@ -7,4 +7,5 @@ exe_processor = require("exe")  -- 网页启动器
 shijian2_translator = require("shijian2") -- 高级时间
 symbol_hint_translator = require("symbol_hint") --反斜杠符号提示
 table_export = require("table_export") --词库导出命令
+tiger_user_words_manager = require("tiger_user_words_manager") --候选管理
 rime_skin_editor = require("rime_skin_editor") --皮肤编辑器入口

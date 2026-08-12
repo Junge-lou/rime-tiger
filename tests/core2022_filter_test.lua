@@ -85,6 +85,54 @@ local function test_lookup_runs_for_each_cjk_character()
   assert_equal(calls, 3, "later calls should query again")
 end
 
+local function test_management_candidates_bypass_common_character_filter()
+  local yielded = {}
+  local previous_yield = _G.yield
+  _G.yield = function(cand)
+    yielded[#yielded + 1] = cand
+  end
+
+  local candidates = {
+    { type = "tiger_user_management", text = "龘" },
+    { type = "tiger_manager_empty", text = "龘" },
+    { type = "tiger_manager_nav_h", text = "龘" },
+    { type = "tiger_manager_record_u", text = "龘" },
+    { type = "tiger_manager_not_a_real_route", text = "龘" },
+    { type = "table", text = "龘" },
+  }
+  local input = {
+    iter = function()
+      local index = 0
+      return function()
+        index = index + 1
+        return candidates[index]
+      end
+    end,
+  }
+  local env = {
+    core2022_db = common_db,
+    engine = {
+      context = {
+        get_option = function()
+          return false
+        end,
+      },
+    },
+  }
+
+  local ok, err = pcall(filter.func, input, env)
+  _G.yield = previous_yield
+  if not ok then
+    error(err, 2)
+  end
+
+  assert_equal(#yielded, 4, "only real management candidates should bypass the common character filter")
+  assert_equal(yielded[1], candidates[1], "current-code management candidate should pass")
+  assert_equal(yielded[2], candidates[2], "global empty candidate should pass")
+  assert_equal(yielded[3], candidates[3], "global navigation candidate should pass")
+  assert_equal(yielded[4], candidates[4], "global record candidate should pass")
+end
+
 local tests = {
   test_full_mode_passes_uncommon_cjk,
   test_common_mode_rejects_uncommon_cjk,
@@ -95,6 +143,7 @@ local tests = {
   test_empty_nil_and_missing_db_fail_open,
   test_throwing_db_fails_open,
   test_lookup_runs_for_each_cjk_character,
+  test_management_candidates_bypass_common_character_filter,
 }
 
 for _, test in ipairs(tests) do

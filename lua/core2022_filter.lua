@@ -69,6 +69,14 @@ local function should_yield(text, full_mode, coredb)
   return true
 end
 
+local function is_management_candidate(cand)
+  local candidate_type = cand and tostring(cand.type or "") or ""
+  return candidate_type == "tiger_user_management"
+    or candidate_type == "tiger_manager_empty"
+    or candidate_type:match("^tiger_manager_nav_[hou]$") ~= nil
+    or candidate_type:match("^tiger_manager_record_[hou]$") ~= nil
+end
+
 function M.init(env)
   if not ReverseDb then
     env.core2022_db = nil
@@ -89,7 +97,7 @@ function M.func(input, env)
   local full_mode = context and context.get_option and context:get_option("extended_char")
   local coredb = env and env.core2022_db
   for cand in input:iter() do
-    if should_yield(cand and cand.text, full_mode, coredb) then
+    if is_management_candidate(cand) or should_yield(cand and cand.text, full_mode, coredb) then
       yield(cand)
     end
   end

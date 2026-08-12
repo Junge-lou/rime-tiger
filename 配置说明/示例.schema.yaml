@@ -77,11 +77,12 @@ switches:
 # filters 过滤和修饰候选。顺序会影响实际行为。
 engine:
   processors:
+    - lua_processor@*tiger_user_words_manager*processor  # Ctrl+Shift+M 候选管理
+    - lua_processor@*tiger_user_words*processor  # 两方案都支持 编码 + \\ + Space 加词
     - ascii_composer  # 处理中英文状态
     - recognizer  # 识别反查、符号、表达式等输入模式
     - lua_processor@*option_sync  # 跨窗口同步功能开关
     - lua_processor@*mars*processor  # 火星文命令开关
-    - lua_processor@*tiger_user_words*processor  # 两方案都支持 Ctrl+; 或 编码 + \\ + Space 加词
     - lua_processor@*space_proc3  # 空码处理
     - lua_processor@*symbol_proc  # 候选唯一时符号顶字
     - key_binder  # 快捷键绑定
@@ -100,6 +101,7 @@ engine:
     - fallback_segmentor  # 兜底
   translators:
     - punct_translator  # 标点翻译
+    - lua_translator@*tiger_user_words_manager*translator  # 候选管理菜单
     - lua_translator@symbol_hint_translator  # 反斜杠符号提示
     - lua_translator@*mars*translator  # 火星文命令
     - reverse_lookup_translator  # 拼音反查
@@ -127,7 +129,6 @@ engine:
     - lua_filter@lua_unicode_display_filter  # Unicode 编码显示
     - lua_filter@*candidate_shadow_filter  # 多滤镜候选压成单层，避免拼音叠加后满码不能顶屏
     - uniquifier  # 去重
-
 
 # 五、拼写规则
 # ------------
@@ -261,6 +262,7 @@ key_binder:
 recognizer:
   import_preset: default
   patterns:
+    user_words_manager: "^\\gl[hou]?[a-z;']*$"  # Ctrl+Shift+M 内部管理路由
     punct: '^\\([0-9]0?|[A-Za-z]*)$'  # 反斜杠符号
     reverse_lookup: "^`[a-z]*'?$"  # 拼音反查
     easy_english: "^'[A-Z|a-z]*`?$"  # 临时英文

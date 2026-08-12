@@ -72,7 +72,8 @@ switches: # 0 默认关，1 默认开
 
 engine:
   processors:
-    - lua_processor@*tiger_user_words*processor #用户加词、减词、调序
+    - lua_processor@*tiger_user_words_manager*processor #候选管理入口
+    - lua_processor@*tiger_user_words*processor #用户加词、删除、调序
     - ascii_composer
     - recognizer
     - lua_processor@*option_sync #跨窗口同步功能开关
@@ -99,6 +100,7 @@ engine:
     - fallback_segmentor
   translators:
     - punct_translator
+    - lua_translator@*tiger_user_words_manager*translator #候选管理菜单
     - lua_translator@symbol_hint_translator #反斜杠符号提示
     - lua_translator@*table_export*translator #词库导出命令
     - lua_translator@*mars*translator #火星文命令
@@ -114,7 +116,7 @@ engine:
 
 
   filters:
-    - lua_filter@*tiger_user_words*filter #用户加词、减词、调序
+    - lua_filter@*tiger_user_words*filter #用户加词、删除、调序
     - lua_filter@*core2022_filter #常用字/全字集过滤；放在简繁前
     # - charset_filter@utf8
     # - charset_filter@gbk
@@ -210,6 +212,7 @@ key_binder:
 recognizer:
   import_preset: default
   patterns:
+    user_words_manager: "^\\gl[hou]?[a-z;']*$"
     punct: '^\\([0-9]0?|[A-Za-z]*)$'
     # uppercase: "" #中文状态大写锁定直接上屏
     reverse_lookup: "^`[a-z]*'?$"

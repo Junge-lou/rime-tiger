@@ -81,13 +81,23 @@ LevelDb = function(name)
     close = function() end,
     update = function(_, key, value)
       db_update_count = db_update_count + 1
-      if database_write_failures[name] then
+      local failure = database_write_failures[name]
+      if type(failure) == "function" and failure(key, value) then
+        return false
+      end
+      if failure == true then
         return false
       end
       data[key] = value
       return true
     end,
     query = function(_, prefix)
+      if prefix ~= "" and db_query_modes[name] == "nil_code" then
+        return nil
+      end
+      if prefix ~= "" and db_query_modes[name] == "throw_code" then
+        error("mock code query failure")
+      end
       if prefix == "" and db_query_modes[name] == "nil" then
         return nil
       end
@@ -106,11 +116,12 @@ LevelDb = function(name)
 end
 
 local function notifier()
-  return {
-    connect = function(_, _)
+  local source = { callback = nil }
+  function source:connect(callback)
+      self.callback = callback
       return { disconnect = function() end }
-    end,
-  }
+  end
+  return source
 end
 
 local function new_init_env(schema_id)
@@ -123,6 +134,7 @@ local function new_init_env(schema_id)
   local context = {
     update_notifier = notifier(),
     select_notifier = notifier(),
+    commit_notifier = notifier(),
   }
   function context:get_property(name)
     return properties[name] or ""
@@ -253,6 +265,12 @@ local function ctrl_key(keycode)
   return key(keycode, { ctrl = true })
 end
 
+local function start_capture(env)
+  assert(words.processor.func(plain_key(0x5c), env) == 1)
+  assert(words.processor.func(plain_key(0x5c), env) == 1)
+  assert(words.processor.func(plain_key(0x20), env) == 1)
+end
+
 Candidate = function(candidate_type, start, finish, text, comment)
   return {
     type = candidate_type,
@@ -261,6 +279,14 @@ Candidate = function(candidate_type, start, finish, text, comment)
     text = text,
     comment = comment,
   }
+end
+
+ShadowCandidate = function(genuine, candidate_type, text, comment)
+  local cand = Candidate(candidate_type, genuine.start or 0, genuine._end or 0, text, comment)
+  function cand:get_genuine()
+    return genuine
+  end
+  return cand
 end
 
 local function empty_input()
@@ -296,6 +322,14 @@ local function filter_output(env, input)
   return output
 end
 
+local function find_snapshot_record(snapshot, code, text)
+  for _, record in ipairs(snapshot) do
+    if record.code == code and record.text == text then
+      return record
+    end
+  end
+end
+
 do
   local engine_a = new_runtime_env("tiger", "isola", {})
   local engine_b = new_runtime_env("tiger", "isolb", {})
@@ -307,14 +341,14 @@ do
   words.filter.init(filter_a)
   words.filter.init(filter_b)
 
-  assert(words.processor.func(ctrl_key(0x3b), engine_a) == 1)
+  start_capture(engine_a)
   local output_a = filter_output(filter_a)
   local output_b = filter_output(filter_b)
   assert(#output_a == 1 and output_a[1].type == "tiger_user_status")
   assert(#output_b == 0, "capture leaked between same-schema engines")
   assert(engine_a.state.capture == nil)
 
-  assert(words.processor.func(ctrl_key(0x3b), engine_b) == 1)
+  start_capture(engine_b)
   assert(words.processor.func(plain_key(0xff1b), engine_a) == 1)
   output_b = filter_output(filter_b)
   assert(#output_b == 1 and output_b[1].text:find("isolb", 1, true))
@@ -329,7 +363,7 @@ do
   words.filter.init(tiger_capture)
   words.filter.init(tigress_capture)
 
-  assert(words.processor.func(ctrl_key(0x3b), tiger_capture) == 1)
+  start_capture(tiger_capture)
   assert(#filter_output(tiger_capture) == 1)
   assert(#filter_output(tigress_capture) == 0, "capture leaked across schemas")
   assert(words.processor.func(plain_key(0xff1b), tiger_capture) == 1)
@@ -368,7 +402,7 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   local added_text = schema_id == "tiger" and "TigerAdded" or "TigressAdded"
   local add_env = new_runtime_env(schema_id, "efgh", { added_text })
   words.processor.init(add_env)
-  assert(words.processor.func(ctrl_key(0x3b), add_env) == 1)
+  start_capture(add_env)
   assert(capture_of(add_env).code == "efgh")
   assert(capture_of(add_env).operation == "add")
   assert(words.processor.func(plain_key(0x61), add_env) == 1)
@@ -383,12 +417,10 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   local disable_text = schema_id == "tiger" and "TigerSource" or "TigressSource"
   local disable_env = new_runtime_env(schema_id, disable_code, { disable_text })
   words.processor.init(disable_env)
-  assert(words.processor.func(ctrl_key(0x27), disable_env) == 1)
-  assert(capture_of(disable_env).code == disable_code)
-  assert(capture_of(disable_env).text == disable_text)
-  assert(capture_of(disable_env).operation == "disable")
-  assert(words.processor.func(plain_key(0xff0d), disable_env) == 1)
+  assert(words.processor.func(key(0xffff, { shift = true }), disable_env) == 1)
   assert(disable_env.state.blocked[disable_code][disable_text])
+  assert(words.processor.func(ctrl_key(0x3b), disable_env) == 2)
+  assert(words.processor.func(ctrl_key(0x27), disable_env) == 2)
   local source_dict = read_file(temp_dir .. "/" .. schema_id .. ".dict.yaml")
   assert(not source_dict:find("# " .. disable_text, 1, true))
 
@@ -412,6 +444,135 @@ for _, schema_id in ipairs({ "tiger", "tigress" }) do
   assert(yielded[1].comment == "空格进入加词")
 end
 
+do
+  local env = new_runtime_env("tiger", "manage", { "隐藏项", "调序项" })
+  words.processor.init(env)
+  words.filter.init(env)
+
+  env.segment.selected_index = 1
+  assert(words.processor.func(ctrl_key(0xff52), env) == 1)
+  env.segment.selected_index = 0
+  assert(words.processor.func(key(0xffff, { ctrl = true }), env) == 1)
+
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), env) == 1)
+  local managed = filter_output(env, candidate_input({ "调序项" }))
+  assert(#managed == 2)
+  local managed_by_text = {}
+  for _, cand in ipairs(managed) do
+    managed_by_text[cand.text] = cand
+  end
+  assert(managed_by_text["隐藏项"].comment:find("Delete 恢复", 1, true))
+  assert(managed_by_text["调序项"].comment:find("手动调序", 1, true))
+
+  assert(words.processor.func(key(0xffff, { shift = true }), env) == 1)
+  assert(not env.state.blocked.manage["隐藏项"])
+
+  assert(words.processor.func(ctrl_key(0x30), env) == 1)
+  assert(not env.state.weights.manage["调序项"])
+
+  assert(words.processor.func(plain_key(0xff1b), env) == 2)
+  assert(env.engine.context:get_property("tiger_user_words_management_code") == "")
+
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), env) == 1)
+  env.engine.context.commit_notifier.callback()
+  assert(env.engine.context:get_property("tiger_user_words_management_code") == "")
+
+  env.engine.context.input = "fresh"
+  assert(words.processor.func(key(0xffff, { ctrl = true }), env) == 1)
+  assert(env.state.blocked.fresh["隐藏项"])
+end
+
+do
+  local migrated = new_runtime_env("tiger", "lgcy", { "LegacyTiger" })
+  words.processor.init(migrated)
+  words.filter.init(migrated)
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), migrated) == 1)
+  local output = filter_output(migrated, candidate_input({ "LegacyTiger" }))
+  assert(#output == 1)
+  assert(not output[1].comment:find("手动调序", 1, true))
+end
+
+do
+  local failure_env = new_runtime_env("tiger", "failure", { "隐藏失败", "调序失败" })
+  words.processor.init(failure_env)
+  words.filter.init(failure_env)
+  failure_env.segment.selected_index = 1
+  assert(words.processor.func(ctrl_key(0xff52), failure_env) == 1)
+  failure_env.segment.selected_index = 0
+  assert(words.processor.func(key(0xffff, { shift = true }), failure_env) == 1)
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), failure_env) == 1)
+
+  database_write_failures.tiger_user_words_tiger = true
+  assert(words.processor.func(key(0xffff, { ctrl = true }), failure_env) == 1)
+  assert(failure_env.state.blocked.failure["隐藏失败"])
+  assert(failure_env.segment.prompt:find("恢复失败", 1, true))
+  assert(words.processor.func(ctrl_key(0x30), failure_env) == 1)
+  assert(failure_env.state.ordered.failure["调序失败"])
+  assert(failure_env.segment.prompt:find("重置失败", 1, true))
+  database_write_failures.tiger_user_words_tiger = nil
+end
+
+do
+  local clean_env = new_runtime_env("tiger", "clean", { "无需重置" })
+  words.processor.init(clean_env)
+  words.filter.init(clean_env)
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), clean_env) == 1)
+  assert(words.processor.func(ctrl_key(0x30), clean_env) == 1)
+  assert(clean_env.segment.prompt:find("无需重置", 1, true))
+  assert(not clean_env.segment.prompt:find("写入", 1, true))
+end
+
+do
+  local converted = new_runtime_env("tiger", "convert", {
+    { display = "恢复词", genuine = "恢復詞" },
+  })
+  words.processor.init(converted)
+  words.filter.init(converted)
+  assert(words.processor.func(key(0xffff, { shift = true }), converted) == 1)
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), converted) == 1)
+  local managed = filter_output(converted, candidate_input({
+    { display = "恢复词", genuine = "恢復詞" },
+  }))
+  assert(managed[1]:get_genuine().text == "恢復詞")
+  function converted.engine.context:get_selected_candidate()
+    return managed[1]
+  end
+  assert(words.processor.func(key(0xffff, { ctrl = true }), converted) == 1)
+  assert(not converted.state.blocked.convert["恢復詞"])
+end
+
+do
+  local add_only = new_runtime_env("tiger", "only", {})
+  add_only.engine.context:set_option("ascii_mode", true)
+  words.processor.init(add_only)
+  start_capture(add_only)
+  assert(words.processor.func(plain_key(0x78), add_only) == 1)
+  assert(words.processor.func(plain_key(0xff0d), add_only) == 1)
+
+  local delete_only = new_runtime_env("tiger", "only", {})
+  words.processor.init(delete_only)
+  function delete_only.engine.context:get_selected_candidate()
+    local genuine = { type = "tiger_user_word", text = "x", comment = "" }
+    return ShadowCandidate(genuine, "simplified", "x", "")
+  end
+  assert(words.processor.func(key(0xffff, { shift = true }), delete_only) == 1)
+  local deleted_only = assert(find_snapshot_record(words.export_snapshot("tiger"), "only", "x"))
+  assert(deleted_only.added == false and deleted_only.hidden == false)
+
+  local add_overlap = new_runtime_env("tiger", "overlap", { "官方重叠" })
+  words.processor.init(add_overlap)
+  start_capture(add_overlap)
+  assert(words.processor.func(plain_key(0x61), add_overlap) == 1)
+  assert(words.processor.func(plain_key(0x20), add_overlap) == 1)
+  assert(words.processor.func(plain_key(0xff0d), add_overlap) == 1)
+
+  local delete_overlap = new_runtime_env("tiger", "overlap", { "官方重叠" })
+  words.processor.init(delete_overlap)
+  assert(words.processor.func(key(0xffff, { ctrl = true }), delete_overlap) == 1)
+  local deleted_overlap = assert(find_snapshot_record(words.export_snapshot("tiger"), "overlap", "官方重叠"))
+  assert(deleted_overlap.added == false and deleted_overlap.hidden == true)
+end
+
 local runtime_failures = {}
 local function runtime_case(name, func)
   local ok, message = xpcall(func, debug.traceback)
@@ -424,7 +585,7 @@ runtime_case("capture metadata without mode-switch hints", function()
   local env = new_runtime_env("tiger", "meta", {})
   words.processor.init(env)
   words.filter.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   local capture = capture_of(env)
   assert(capture.code == "meta" and capture.text == "" and capture.query == "")
   assert(capture.operation == "add" and capture.message == "")
@@ -437,6 +598,9 @@ runtime_case("capture metadata without mode-switch hints", function()
   assert(not output[1].comment:find("Ctrl+;", 1, true))
   assert(not output[1].comment:find("中文取词", 1, true))
   assert(not output[1].comment:find("英文直录", 1, true))
+  assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), env) == 1)
+  assert(capture_of(env) == capture)
+  assert(env.engine.context:get_property("tiger_user_words_management_code") == "")
   env.engine.context:set_option("ascii_mode", true)
   output = filter_output(env)
   assert(output[1].comment == "")
@@ -446,7 +610,7 @@ end)
 runtime_case("bare Shift toggles and Shift letter does not", function()
   local env = new_runtime_env("tiger", "shift", {})
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   local capture = capture_of(env)
   assert(words.processor.func(key(0xffe1, { shift = true }), env) == 1)
   assert(capture.shift_key == 0xffe1 and capture.shift_used == false)
@@ -465,7 +629,7 @@ end)
 runtime_case("modified Shift gestures do not arm or toggle", function()
   local env = new_runtime_env("tiger", "modshift", {})
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   local capture = capture_of(env)
 
   for _, modifiers in ipairs({
@@ -499,7 +663,7 @@ runtime_case("dual Shift gestures never toggle", function()
   local function assert_dual_shift(first, second, release_first, release_second)
     local env = new_runtime_env("tiger", "dualshift", {})
     words.processor.init(env)
-    assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+    start_capture(env)
     local capture = capture_of(env)
 
     assert(words.processor.func(key(first, { shift = true }), env) == 1)
@@ -522,7 +686,7 @@ runtime_case("English lowercase spaces punctuation and keypad literals", functio
   local env = new_runtime_env("tiger", "english", {})
   env.engine.context:set_option("ascii_mode", true)
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   for _, keycode in ipairs({ 0x68, 0x69, 0x20, 0x74, 0x68, 0x65, 0x72, 0x65, 0x2c, 0xffb2, 0xffab }) do
     assert(words.processor.func(plain_key(keycode), env) == 1)
   end
@@ -539,7 +703,7 @@ runtime_case("Chinese literal and genuine candidate flow", function()
   })
   words.processor.init(env)
   words.filter.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   assert(words.processor.func(key(0x78, { shift = true }), env) == 1)
   assert(words.processor.func(plain_key(0x34), env) == 1)
   assert(words.processor.func(plain_key(0x61), env) == 1)
@@ -559,7 +723,7 @@ end)
 runtime_case("Chinese keypad and punctuation conversion", function()
   local env = new_runtime_env("tiger", "punct", {})
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   for _, keycode in ipairs({ 0xffb7, 0xffae, 0xffac, 0xffaf }) do
     assert(words.processor.func(plain_key(keycode), env) == 1)
   end
@@ -574,7 +738,7 @@ end)
 runtime_case("unsafe and unsupported input is consumed", function()
   local env = new_runtime_env("tiger", "consume", {})
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   local capture = capture_of(env)
   for _, event in ipairs({
     key(0x62, { ctrl = true }),
@@ -605,7 +769,7 @@ end)
 runtime_case("Unicode backspace prefers query", function()
   local env = new_runtime_env("tiger", "erase", { "中文" })
   words.processor.init(env)
-  assert(words.processor.func(ctrl_key(0x3b), env) == 1)
+  start_capture(env)
   words.processor.func(plain_key(0x61), env)
   words.processor.func(plain_key(0x20), env)
   local capture = capture_of(env)
@@ -623,7 +787,7 @@ runtime_case("empty save preserves capture with transient message", function()
   local env = new_runtime_env("tiger", "empty", {})
   words.processor.init(env)
   words.filter.init(env)
-  words.processor.func(ctrl_key(0x3b), env)
+  start_capture(env)
   local capture = capture_of(env)
   assert(words.processor.func(plain_key(0xff0d), env) == 1)
   assert(capture_of(env) == capture)
@@ -636,7 +800,7 @@ runtime_case("persistence failure preserves capture and text", function()
   local env = new_runtime_env("tiger", "retry", {})
   env.engine.context:set_option("ascii_mode", true)
   words.processor.init(env)
-  words.processor.func(ctrl_key(0x3b), env)
+  start_capture(env)
   words.processor.func(plain_key(0x78), env)
   local capture = capture_of(env)
   database_write_failures.tiger_user_words_tiger = true
@@ -651,7 +815,7 @@ end)
 runtime_case("ascii mode restores after save cancel and fini", function()
   local save_env = new_runtime_env("tiger", "saved", {})
   words.processor.init(save_env)
-  words.processor.func(ctrl_key(0x3b), save_env)
+  start_capture(save_env)
   words.processor.func(key(0xffe1, { shift = true }), save_env)
   words.processor.func(key(0xffe1, { release = true }), save_env)
   words.processor.func(plain_key(0x78), save_env)
@@ -663,7 +827,7 @@ runtime_case("ascii mode restores after save cancel and fini", function()
   local cancel_env = new_runtime_env("tiger", "cancel", {})
   cancel_env.engine.context:set_option("ascii_mode", true)
   words.processor.init(cancel_env)
-  words.processor.func(ctrl_key(0x3b), cancel_env)
+  start_capture(cancel_env)
   words.processor.func(key(0xffe1, { shift = true }), cancel_env)
   words.processor.func(key(0xffe1, { release = true }), cancel_env)
   assert(cancel_env.engine.context:get_option("ascii_mode") == false)
@@ -675,7 +839,7 @@ runtime_case("ascii mode restores after save cancel and fini", function()
 
   local fini_env = new_runtime_env("tiger", "final", {})
   words.processor.init(fini_env)
-  words.processor.func(ctrl_key(0x3b), fini_env)
+  start_capture(fini_env)
   words.processor.func(key(0xffe1, { shift = true }), fini_env)
   words.processor.func(key(0xffe1, { release = true }), fini_env)
   words.processor.func(plain_key(0x78), fini_env)
@@ -714,14 +878,6 @@ local reloaded_quick_symbol_output = filter_output(reloaded_quick_symbol_env, ca
 assert(reloaded_quick_symbol_output[1].text == "来", "reloaded zero-weight quick symbol should keep dictionary order")
 assert(reloaded_quick_symbol_output[2].text == "！")
 
-local function find_snapshot_record(snapshot, code, text)
-  for _, record in ipairs(snapshot) do
-    if record.code == code and record.text == text then
-      return record
-    end
-  end
-end
-
 local tiger_db_name = "tiger_user_words_tiger"
 local writes_before_snapshot = db_update_count
 local librime_metadata = {
@@ -739,8 +895,12 @@ local tiger_added = assert(find_snapshot_record(tiger_snapshot, "efgh", "TigerAd
 local tiger_source = assert(find_snapshot_record(tiger_snapshot, "tsrc", "TigerSource"))
 local tiger_second = assert(find_snapshot_record(tiger_snapshot, "mnop", "第二"))
 assert(tiger_added.added == true)
+assert(tiger_added.source == "shortcut")
+assert(databases[tiger_db_name]["efgh \tTigerAdded"]:find("s=1", 1, true))
+assert(find_snapshot_record(tiger_snapshot, "lgcy", "LegacyTiger").source == nil)
 assert(tiger_source.hidden == true)
 assert(tiger_second.weight == 100000000000)
+assert(tiger_second.ordered == true)
 assert(tiger_added.updated_at == nil)
 assert(tiger_added.record == nil)
 
@@ -755,6 +915,103 @@ local isolated_added = assert(find_snapshot_record(isolated_snapshot, "efgh", "T
 assert(isolated_added.text == "TigerAdded")
 assert(isolated_added.added == true)
 assert(db_update_count == writes_before_snapshot)
+
+assert(reloaded_words.restore_hidden("tiger", "tsrc", "TigerSource"))
+assert(not reloaded_env.state.blocked.tsrc.TigerSource)
+assert(find_snapshot_record(reloaded_words.export_snapshot("tiger"), "tsrc", "TigerSource").hidden == false)
+
+assert(reloaded_words.clear_order("tiger", "mnop", "第二"))
+assert(not reloaded_env.state.weights.mnop["第二"])
+local cleared_order = assert(find_snapshot_record(reloaded_words.export_snapshot("tiger"), "mnop", "第二"))
+assert(cleared_order.ordered == false and cleared_order.weight == 0)
+
+assert(reloaded_words.remove_shortcut("tiger", "efgh", "TigerAdded"))
+assert(not reloaded_env.state.added.efgh.TigerAdded)
+local removed_shortcut = assert(find_snapshot_record(reloaded_words.export_snapshot("tiger"), "efgh", "TigerAdded"))
+assert(removed_shortcut.added == false and removed_shortcut.source == nil and removed_shortcut.weight == 0)
+assert(not reloaded_words.remove_shortcut("tiger", "lgcy", "LegacyTiger"))
+
+databases[tiger_db_name]["reset \tHidden"] = "v=1 a=0 h=1 w=0 t=1 s=0 o=0"
+databases[tiger_db_name]["reset \tOrdered"] = "v=1 a=0 h=0 w=99 t=2 s=0 o=1"
+databases[tiger_db_name]["legacyorder \tOldOrder"] = "v=1 a=0 h=0 w=77 t=3"
+databases[tiger_db_name]["marker \tMarkerWord"] = "v=1 a=0 h=0 w=0 t=4 s=0 o=0"
+write_file(temp_dir .. "/tiger.user.dict.yaml", table.concat({
+  "# Rime dictionary: tiger.user",
+  "---",
+  "name: tiger.user",
+  "...",
+  "LegacyTiger\tlgcy\t42",
+  "# USER_WORDS_MARKER\tdisabled\tmarker\tMarkerWord\t0",
+  "",
+}, "\n"))
+package.loaded["tiger_user_words"] = nil
+local reset_words = require("tiger_user_words")
+local reset_env = new_runtime_env("tiger", "reset", { "Hidden", "Ordered" })
+reset_words.processor.init(reset_env)
+assert(reset_env.state.ordered.legacyorder.OldOrder)
+assert(not (reset_env.state.blocked.marker and reset_env.state.blocked.marker.MarkerWord))
+assert(reset_words.clear_order("tiger", "legacyorder", "OldOrder"))
+assert(reset_words.reset_code("tiger", "reset"))
+assert(not reset_env.state.blocked.reset.Hidden)
+assert(not reset_env.state.weights.reset.Ordered)
+local reset_snapshot = reset_words.export_snapshot("tiger")
+assert(find_snapshot_record(reset_snapshot, "reset", "Hidden").hidden == false)
+assert(find_snapshot_record(reset_snapshot, "reset", "Ordered").ordered == false)
+
+databases[tiger_db_name]["rollback \tFirst"] = "v=1 a=0 h=1 w=0 t=4 s=0 o=0"
+databases[tiger_db_name]["rollback \tSecond"] = "v=1 a=0 h=0 w=88 t=5 s=0 o=1"
+package.loaded["tiger_user_words"] = nil
+local rollback_words = require("tiger_user_words")
+local rollback_env = new_runtime_env("tiger", "rollback", { "First", "Second" })
+rollback_words.processor.init(rollback_env)
+local failed_once = false
+database_write_failures[tiger_db_name] = function(key)
+  if key == "rollback \tSecond" and not failed_once then
+    failed_once = true
+    return true
+  end
+  return false
+end
+assert(not rollback_words.reset_code("tiger", "rollback"))
+database_write_failures[tiger_db_name] = nil
+local rolled_back = rollback_words.export_snapshot("tiger")
+assert(find_snapshot_record(rolled_back, "rollback", "First").hidden == true)
+assert(find_snapshot_record(rolled_back, "rollback", "Second").ordered == true)
+assert(rollback_env.state.blocked.rollback.First)
+assert(rollback_env.state.ordered.rollback.Second)
+
+local first_write_count = 0
+database_write_failures[tiger_db_name] = function(key)
+  if key == "rollback \tFirst" then
+    first_write_count = first_write_count + 1
+    return first_write_count == 2
+  end
+  return key == "rollback \tSecond"
+end
+local reset_ok, reset_status = rollback_words.reset_code("tiger", "rollback")
+assert(not reset_ok)
+assert(reset_status == "partial")
+database_write_failures[tiger_db_name] = nil
+local partially_reset = rollback_words.export_snapshot("tiger")
+assert(find_snapshot_record(partially_reset, "rollback", "First").hidden == false)
+assert(find_snapshot_record(partially_reset, "rollback", "Second").ordered == true)
+assert(not rollback_env.state.blocked.rollback.First)
+assert(rollback_env.state.ordered.rollback.Second)
+
+db_query_modes[tiger_db_name] = "nil_code"
+local query_ok, query_status = rollback_words.reset_code("tiger", "rollback")
+assert(not query_ok)
+assert(query_status == "failed")
+local first_before_failed_delete = databases[tiger_db_name]["rollback \tFirst"]
+local query_failure_env = new_runtime_env("tiger", "rollback", { "First" })
+rollback_words.processor.init(query_failure_env)
+assert(rollback_words.processor.func(key(0xffff, { shift = true }), query_failure_env) == 2)
+assert(databases[tiger_db_name]["rollback \tFirst"] == first_before_failed_delete)
+db_query_modes[tiger_db_name] = nil
+
+reloaded_words = rollback_words
+reloaded_env = rollback_env
+writes_before_snapshot = db_update_count
 
 assert(reloaded_words.export_snapshot("unknown") == nil)
 
