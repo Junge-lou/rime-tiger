@@ -641,12 +641,11 @@ local function capture_status_text(capture)
     return label .. " " .. capture.code .. "：" .. text
 end
 
-local function capture_status_comment(capture, context)
+local function capture_status_comment(capture)
     if capture.message and capture.message ~= "" then
         return capture.message
     end
-    local mode = context:get_option("ascii_mode") and "英文直录" or "中文取词"
-    return "[" .. mode .. "] Enter确认  Esc取消  Backspace删除"
+    return "Enter确认  Esc取消  Backspace删除"
 end
 
 local function update_prompt(env)
@@ -656,7 +655,7 @@ local function update_prompt(env)
     end
     local seg = current_segment(env)
     if seg then
-        seg.prompt = "〔" .. capture_status_text(capture) .. "｜" .. capture_status_comment(capture, env.engine.context) .. "〕"
+        seg.prompt = "〔" .. capture_status_text(capture) .. "｜" .. capture_status_comment(capture) .. "〕"
     end
 end
 
@@ -1128,7 +1127,7 @@ local function capture_status_candidate(env, capture)
         start,
         finish,
         capture_status_text(capture),
-        capture_status_comment(capture, env.engine.context)
+        capture_status_comment(capture)
     )
 end
 
