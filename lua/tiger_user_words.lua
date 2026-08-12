@@ -645,7 +645,7 @@ local function capture_status_comment(capture)
     if capture.message and capture.message ~= "" then
         return capture.message
     end
-    return "Enter确认  Esc取消  Backspace删除"
+    return ""
 end
 
 local function update_prompt(env)
@@ -655,7 +655,9 @@ local function update_prompt(env)
     end
     local seg = current_segment(env)
     if seg then
-        seg.prompt = "〔" .. capture_status_text(capture) .. "｜" .. capture_status_comment(capture) .. "〕"
+        local comment = capture_status_comment(capture)
+        local suffix = comment ~= "" and "｜" .. comment or ""
+        seg.prompt = "〔" .. capture_status_text(capture) .. suffix .. "〕"
     end
 end
 
