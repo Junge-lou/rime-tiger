@@ -10,6 +10,7 @@
 --   Ctrl+Home/End or Ctrl+Option+Home/End move current candidate to page edge
 
 local add_trigger = require("tiger_add_trigger")
+local capture_input = require("tiger_capture_input")
 
 local kRejected = 0
 local kAccepted = 1
@@ -69,6 +70,12 @@ local PROFILES = {
 local DB_SEPARATOR = " \t"
 local DB_META_KEY = "__tiger_user_words_meta__"
 local DB_VERSION = 1
+local LIBRIME_METADATA_KEYS = {
+    ["\1/db_name"] = true,
+    ["\1/db_type"] = true,
+    ["\1/rime_version"] = true,
+    ["\1/user_id"] = true,
+}
 local db_pools = {}
 
 local function parse_db_record(value)
@@ -169,27 +176,39 @@ end
 
 function Store:list_all()
     local records = {}
-    local ok = pcall(function()
+    local ok, available = pcall(function()
         local accessor = self.pool.db:query("")
         if not accessor then
-            return
+            return false
         end
         for key, value in accessor:iter() do
             local split = key:find(DB_SEPARATOR, 1, true)
-            local record = parse_db_record(value)
-            if split and record then
+            if not split and LIBRIME_METADATA_KEYS[key] then
+                -- LevelDb stores its own database metadata beside user records.
+            elseif not split then
+                return false
+            else
+                local record = parse_db_record(value)
+                if not record then
+                    return false
+                end
                 local code = key:sub(1, split - 1)
+                local text = key:sub(split + #DB_SEPARATOR)
                 if code ~= DB_META_KEY then
+                    if code == "" or text == "" then
+                        return false
+                    end
                     table.insert(records, {
                         code = code,
-                        text = key:sub(split + #DB_SEPARATOR),
+                        text = text,
                         record = record,
                     })
                 end
             end
         end
+        return true
     end)
-    return ok and records or nil
+    return ok and available and records or nil
 end
 
 function Store:write(code, text, record)
@@ -225,16 +244,51 @@ function Store:mark_migrated()
 end
 
 local shared_states = {}
+local capture_sessions = {}
+local capture_token_counter = 0
+local capture_token_prefix = "tiger_user_words:" .. tostring(capture_sessions) .. ":"
+local capture_token_property = "tiger_user_words_capture_token"
+
+local function capture_token(engine, create)
+    local context = engine.context
+    local token = context:get_property(capture_token_property)
+    if token == "" and create then
+        capture_token_counter = capture_token_counter + 1
+        token = capture_token_prefix .. capture_token_counter
+        context:set_property(capture_token_property, token)
+    end
+    return token
+end
+
+local function set_capture(engine, capture)
+    capture_sessions[capture_token(engine, true)] = capture
+end
+
+local function get_capture(engine)
+    local token = capture_token(engine, false)
+    return token ~= "" and capture_sessions[token] or nil
+end
+
+local function clear_engine_capture(engine)
+    local token = capture_token(engine, false)
+    if token ~= "" then
+        capture_sessions[token] = nil
+        engine.context:set_property(capture_token_property, "")
+    end
+end
 
 local KEY = {
     BACKSPACE = 0xff08,
     RETURN = 0xff0d,
+    KP_RETURN = 0xff8d,
     ESCAPE = 0xff1b,
     HOME = 0xff50,
     LEFT = 0xff51,
     UP = 0xff52,
     RIGHT = 0xff53,
     DOWN = 0xff54,
+    PAGE_UP = 0xff55,
+    PAGE_DOWN = 0xff56,
     END = 0xff57,
     SPACE = 0x20,
     BACKSLASH = 0x5c,
@@ -587,24 +641,22 @@ local function capture_status_text(capture)
     return label .. " " .. capture.code .. "：" .. text
 end
 
-local function capture_status_comment()
-    return "Enter确认  Esc退出  Backspace删除"
-end
-
-local function sync_capture_state(env)
-    if env.state then
-        env.state.capture = env.capture
+local function capture_status_comment(capture, context)
+    if capture.message and capture.message ~= "" then
+        return capture.message
     end
+    local mode = context:get_option("ascii_mode") and "英文直录" or "中文取词"
+    return "[" .. mode .. "] Enter确认  Esc取消  Backspace删除"
 end
 
 local function update_prompt(env)
-    local capture = env.capture or (env.state and env.state.capture)
+    local capture = get_capture(env.engine)
     if not capture then
         return
     end
     local seg = current_segment(env)
     if seg then
-        seg.prompt = "〔" .. capture_status_text(capture) .. "｜" .. capture_status_comment() .. "〕"
+        seg.prompt = "〔" .. capture_status_text(capture) .. "｜" .. capture_status_comment(capture, env.engine.context) .. "〕"
     end
 end
 
@@ -615,20 +667,24 @@ local function refresh_context(ctx)
 end
 
 local function show_capture_context(env)
-    if not env.capture then
+    local capture = get_capture(env.engine)
+    if not capture then
         return
     end
     local ctx = env.engine.context
-    local query = env.capture.query or ""
+    local query = capture.query or ""
     ctx:clear()
-    ctx.input = query ~= "" and query or env.capture.code
+    ctx.input = query ~= "" and query or capture.code
     refresh_context(ctx)
     update_prompt(env)
 end
 
 local function clear_capture(env)
-    env.capture = nil
-    sync_capture_state(env)
+    local capture = get_capture(env.engine)
+    if capture then
+        env.engine.context:set_option("ascii_mode", capture.original_ascii_mode)
+    end
+    clear_engine_capture(env.engine)
 end
 
 local function enter_capture(env, operation, default_text, target_code)
@@ -636,30 +692,43 @@ local function enter_capture(env, operation, default_text, target_code)
     if code == "" then
         return false
     end
-    env.capture = {
+    set_capture(env.engine, {
         code = code,
         text = default_text or "",
         query = "",
         operation = operation or "add",
-    }
-    sync_capture_state(env)
+        message = "",
+        original_ascii_mode = env.engine.context:get_option("ascii_mode"),
+        shift_key = nil,
+        shift_used = false,
+    })
     show_capture_context(env)
     return true
 end
 
 local function finish_capture(env)
-    if not env.capture or env.capture.text == "" then
+    local capture = get_capture(env.engine)
+    if not capture then
         return false
     end
-    local code = env.capture.code
-    local text = env.capture.text
-    local saved
-    if env.capture.operation == "disable" then
-        saved = persist_disable(env.state, code, text)
-    else
-        saved = persist_weight(env.state, code, text, env.state.config.weight_base)
+    if capture.text == "" then
+        capture.message = "请先选择或输入要加入的词"
+        refresh_context(env.engine.context)
+        update_prompt(env)
+        return false
     end
-    if not saved then
+    local code = capture.code
+    local text = capture.text
+    local call_ok, saved = pcall(function()
+        if capture.operation == "disable" then
+            return persist_disable(env.state, code, text)
+        end
+        return persist_weight(env.state, code, text, env.state.config.weight_base)
+    end)
+    if not call_ok or not saved then
+        capture.message = "保存失败，请重试"
+        refresh_context(env.engine.context)
+        update_prompt(env)
         return false
     end
     clear_capture(env)
@@ -671,39 +740,36 @@ local function finish_capture(env)
 end
 
 local function append_capture_text(env, text)
-    if not env.capture or text == "" then
+    local capture = get_capture(env.engine)
+    if not capture or text == "" then
         return false
     end
-    env.capture.text = env.capture.text .. text
-    env.capture.query = ""
-    sync_capture_state(env)
+    capture.text = capture.text .. text
+    capture.query = ""
+    capture.message = ""
     show_capture_context(env)
     return true
 end
 
-local function append_capture_input(env, keycode)
-    local ch = nil
-    if keycode >= 0x61 and keycode <= 0x7a then
-        ch = string.char(keycode)
-    elseif keycode >= 0x41 and keycode <= 0x5a then
-        ch = string.char(keycode + 0x20)
-    end
-    if not ch then
+local function append_capture_input(env, ch)
+    local capture = get_capture(env.engine)
+    if not capture or not ch or ch == "" then
         return false
     end
-    env.capture.query = (env.capture.query or "") .. ch
-    sync_capture_state(env)
+    capture.query = (capture.query or "") .. ch
+    capture.message = ""
     show_capture_context(env)
     return true
 end
 
 local function capture_backspace(env)
-    if env.capture.query and env.capture.query ~= "" then
-        env.capture.query = env.capture.query:sub(1, -2)
+    local capture = get_capture(env.engine)
+    if capture.query and capture.query ~= "" then
+        capture.query = capture.query:sub(1, -2)
     else
-        env.capture.text = remove_last_utf8_char(env.capture.text)
+        capture.text = remove_last_utf8_char(capture.text)
     end
-    sync_capture_state(env)
+    capture.message = ""
     show_capture_context(env)
 end
 
@@ -717,7 +783,8 @@ local function candidate_at(env, index)
 end
 
 local function capture_selection(env, keycode)
-    if not env.capture or not env.capture.query or env.capture.query == "" then
+    local capture = get_capture(env.engine)
+    if not capture or not capture.query or capture.query == "" then
         return false
     end
     local seg = current_segment(env)
@@ -725,16 +792,16 @@ local function capture_selection(env, keycode)
         return false
     end
     local index = seg.selected_index or 0
-    if keycode >= 0x31 and keycode <= 0x39 then
-        local page_size = env.engine.schema.page_size or 5
-        local page_start = math.floor(index / page_size) * page_size
-        index = page_start + (keycode - 0x31)
-    elseif keycode == KEY.SEMICOLON then
-        index = math.floor(index / (env.engine.schema.page_size or 5)) * (env.engine.schema.page_size or 5) + 1
-    elseif keycode == KEY.APOSTROPHE then
-        index = math.floor(index / (env.engine.schema.page_size or 5)) * (env.engine.schema.page_size or 5) + 2
-    elseif keycode ~= KEY.SPACE and keycode ~= KEY.RETURN then
-        return false
+    if keycode ~= KEY.SPACE then
+        index = capture_input.selection_index(
+            index,
+            keycode,
+            env.engine.schema.page_size or 5,
+            env.select_keys
+        )
+        if index == nil then
+            return false
+        end
     end
     local cand = candidate_at(env, index)
     while is_status_candidate(cand) do
@@ -898,11 +965,12 @@ local processor = {}
 function processor.init(env)
     local profile = profile_for_env(env)
     env.state = profile and get_state(profile) or nil
-    env.capture = nil
     if not env.state then
         return
     end
-    sync_capture_state(env)
+    local config = env.engine.schema.config
+    env.select_keys = config and config.get_string
+        and config:get_string("menu/alternative_select_keys") or "1234567890"
     env.update_notifier = env.engine.context.update_notifier:connect(function()
         update_prompt(env)
     end)
@@ -912,6 +980,7 @@ function processor.init(env)
 end
 
 function processor.fini(env)
+    clear_capture(env)
     if env.update_notifier then
         env.update_notifier:disconnect()
     end
@@ -926,29 +995,93 @@ function processor.func(key_event, env)
     end
     local keycode = key_event.keycode
 
-    if env.capture then
-        if keycode == KEY.RETURN and not key_event:release() then
+    local capture = get_capture(env.engine)
+    if capture then
+        local ctx = env.engine.context
+        local has_shortcut_modifier = key_event:ctrl() or key_event:alt() or key_event:super()
+        if capture_input.is_shift_key(keycode) then
+            if has_shortcut_modifier then
+                return kAccepted
+            end
+            if key_event:release() then
+                if capture.shift_key == keycode then
+                    if not capture.shift_used then
+                        ctx:set_option("ascii_mode", not ctx:get_option("ascii_mode"))
+                        refresh_context(ctx)
+                        update_prompt(env)
+                    end
+                    capture.shift_key = nil
+                    capture.shift_used = false
+                end
+            else
+                if capture.shift_key == nil then
+                    capture.shift_key = keycode
+                    capture.shift_used = false
+                elseif capture.shift_key ~= keycode then
+                    capture.shift_used = true
+                end
+            end
+            return kAccepted
+        elseif key_event:release() then
+            return kAccepted
+        end
+
+        if capture.shift_key then
+            capture.shift_used = true
+        end
+
+        local is_edit_key = keycode == KEY.RETURN or keycode == KEY.KP_RETURN
+            or keycode == KEY.ESCAPE or keycode == KEY.BACKSPACE
+        if is_edit_key and (has_shortcut_modifier or key_event:shift()) then
+            return kAccepted
+        elseif keycode == KEY.RETURN or keycode == KEY.KP_RETURN then
             finish_capture(env)
             return kAccepted
-        elseif keycode == KEY.ESCAPE and not key_event:release() then
+        elseif keycode == KEY.ESCAPE then
             clear_capture(env)
-            env.engine.context:clear()
+            ctx:clear()
             return kAccepted
-        elseif keycode == KEY.BACKSPACE and not key_event:release() then
+        elseif keycode == KEY.BACKSPACE then
             capture_backspace(env)
             return kAccepted
-        elseif not key_event:ctrl() and not key_event:alt() and not key_event:release()
-            and (keycode == KEY.SPACE or keycode == KEY.SEMICOLON or keycode == KEY.APOSTROPHE
-                 or (keycode >= 0x31 and keycode <= 0x39)) then
+        elseif has_shortcut_modifier or capture_input.is_modifier_key(keycode) then
+            return kAccepted
+        end
+
+        local action, ch = capture_input.classify(
+            keycode,
+            ctx:get_option("ascii_mode"),
+            capture.query ~= "",
+            env.select_keys,
+            key_event:shift()
+        )
+        if action == "select" then
             capture_selection(env, keycode)
             return kAccepted
-        elseif not key_event:ctrl() and not key_event:alt() and not key_event:release()
-            and ((keycode >= 0x61 and keycode <= 0x7a) or (keycode >= 0x41 and keycode <= 0x5a)) then
-            append_capture_input(env, keycode)
+        elseif action == "query" then
+            append_capture_input(env, ch)
+            return kAccepted
+        elseif action == "literal" then
+            append_capture_text(env, capture_input.literal_char(
+                capture.text,
+                ch,
+                ctx:get_option("ascii_mode"),
+                ctx:get_option("ascii_punct"),
+                ctx:get_option("full_shape")
+            ))
+            return kAccepted
+        elseif action == "consume" then
             return kAccepted
         end
         update_prompt(env)
-        return kNoop
+        if not key_event:shift() and (
+            keycode == KEY.LEFT or keycode == KEY.RIGHT or keycode == KEY.UP or keycode == KEY.DOWN
+            or keycode == KEY.HOME or keycode == KEY.END
+            or keycode == KEY.PAGE_UP or keycode == KEY.PAGE_DOWN
+        ) then
+            return kNoop
+        end
+        return kAccepted
     end
 
     if not key_event:ctrl() and not key_event:alt() and not key_event:shift() and not key_event:release() then
@@ -990,7 +1123,13 @@ local function capture_status_candidate(env, capture)
     local seg = current_segment(env)
     local start = seg and seg._start or 0
     local finish = seg and seg._end or start
-    return Candidate("tiger_user_status", start, finish, capture_status_text(capture), capture_status_comment())
+    return Candidate(
+        "tiger_user_status",
+        start,
+        finish,
+        capture_status_text(capture),
+        capture_status_comment(capture, env.engine.context)
+    )
 end
 
 local function add_trigger_status_candidate(env, code)
@@ -1002,7 +1141,7 @@ end
 
 local function candidate_sort_key(state, code, text, fallback)
     local weight = state.weights[code] and state.weights[code][text]
-    if weight then
+    if weight and weight ~= 0 then
         return weight
     end
     return fallback
@@ -1016,11 +1155,10 @@ function filter.func(input, env)
         return
     end
 
-    if env.state and env.state.capture then
-        yield(capture_status_candidate(env, env.state.capture))
-        if not env.state.capture.query or env.state.capture.query == "" then
-            return
-        end
+    local capture = get_capture(env.engine)
+    if capture and (not capture.query or capture.query == "") then
+        yield(capture_status_candidate(env, capture))
+        return
     end
 
     local trigger_code = add_trigger.target_code(env.engine.context.input)
@@ -1078,7 +1216,7 @@ function filter.func(input, env)
             local start = seg and seg._start or 0
             local finish = seg and seg._end or #code
             local cand = Candidate("tiger_user_word", start, finish, text, "")
-            cand.quality = weights[text] or state.config.weight_base
+            cand.quality = candidate_sort_key(state, code, text, 0 - index)
             table.insert(rows, {
                 cand = cand,
                 text = text,
@@ -1100,7 +1238,40 @@ function filter.func(input, env)
     end
 end
 
+local function export_snapshot(schema_id)
+    local profile = PROFILES[schema_id]
+    if not profile then
+        return nil
+    end
+
+    local db = acquire_db(profile.db_name)
+    if not db then
+        return nil, "用户词数据库不可用"
+    end
+
+    local rows = db:list_all()
+    if not rows then
+        return nil, "用户词数据库不可用"
+    end
+
+    local snapshot = {}
+    for _, row in ipairs(rows) do
+        table.insert(snapshot, {
+            code = row.code,
+            text = row.text,
+            added = row.record.added,
+            hidden = row.record.hidden,
+            weight = row.record.weight,
+        })
+    end
+    return snapshot
+end
+
 return {
     processor = processor,
     filter = filter,
+    export_snapshot = export_snapshot,
+    _test = {
+        get_capture = get_capture,
+    },
 }

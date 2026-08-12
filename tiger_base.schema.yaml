@@ -72,6 +72,7 @@ switches: # 0 默认关，1 默认开
 
 engine:
   processors:
+    - lua_processor@*tiger_user_words*processor #用户加词、减词、调序
     - ascii_composer
     - recognizer
     - lua_processor@*option_sync #跨窗口同步功能开关
@@ -79,7 +80,7 @@ engine:
     - lua_processor@*input_speed_stat*processor #测速统计开关
     - lua_processor@*djs_countdown*processor #倒计时管理
     - lua_processor@*mars*processor #火星文命令开关
-    - lua_processor@*tiger_user_words*processor #用户加词、减词、调序
+    - lua_processor@*table_export*processor #词库导出命令
     - lua_processor@*space_proc3 #标顶空码不上屏
     - lua_processor@*symbol_proc #候选唯一时符号顶字
     - key_binder
@@ -99,6 +100,7 @@ engine:
   translators:
     - punct_translator
     - lua_translator@symbol_hint_translator #反斜杠符号提示
+    - lua_translator@*table_export*translator #词库导出命令
     - lua_translator@*mars*translator #火星文命令
     - lua_translator@*input_speed_stat*translator #测速统计
     - reverse_lookup_translator #拼音反查

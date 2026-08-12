@@ -31,6 +31,7 @@ local hints = {
   { code = "fjq", label = "节气" },
   { code = "lzvq", label = "节气" },
   { code = "djs", label = "倒计时/管理" },
+  { code = "dcck", label = "导出词库" },
   { code = "skin", label = "皮肤编辑" },
   { code = "pifu", label = "皮肤编辑" },
   { code = "pfbj", label = "皮肤编辑" },
@@ -66,15 +67,19 @@ local function starts_with(text, prefix)
   return text:sub(1, #prefix) == prefix
 end
 
-local function translator(input, seg)
+local function translator(input, seg, env)
   if input:sub(1, 1) ~= "\\" then
     return
   end
 
   local prefix = input:sub(2)
+  local schema = env and env.engine and env.engine.schema
+  local schema_id = schema and schema.schema_id
+  local supports_table_export = schema_id == "tiger" or schema_id == "tigress"
   local count = 0
   for _, item in ipairs(hints) do
-    if prefix == "" or starts_with(item.code, prefix) then
+    if (item.code ~= "dcck" or (supports_table_export and prefix ~= item.code))
+        and (prefix == "" or starts_with(item.code, prefix)) then
       count = count + 1
       local cand = Candidate("symbol_hint", seg.start, seg._end, "\\" .. item.code .. " " .. item.label, "继续输入 " .. item.code)
       cand.quality = -1000 - count

@@ -33,6 +33,82 @@ local function assert_order(text, first, second, label)
   end
 end
 
+local function assert_occurrences(text, pattern, expected, label)
+  local count = 0
+  local start = 1
+  while true do
+    local position = text:find(pattern, start, true)
+    if not position then
+      break
+    end
+    count = count + 1
+    start = position + #pattern
+  end
+  if count ~= expected then
+    error(label .. ": expected " .. expected .. " occurrences of " .. pattern .. ", got " .. count, 2)
+  end
+end
+
+local function assert_equal(actual, expected, label)
+  if actual ~= expected then
+    error(string.format("%s: expected %q, got %q", label, tostring(expected), tostring(actual)), 2)
+  end
+end
+
+local function processor_entries(text, label)
+  local entries = {}
+  local in_engine = false
+  local in_processors = false
+  local found_segmentors = false
+
+  text = text:gsub("\r\n", "\n")
+  for raw_line in (text .. "\n"):gmatch("(.-)\n") do
+    local line = raw_line:gsub("#.*$", "")
+    line = line:match("^%s*(.-)%s*$")
+    if line == "engine:" then
+      in_engine = true
+    elseif in_engine and line == "processors:" then
+      in_processors = true
+    elseif in_processors and line == "segmentors:" then
+      found_segmentors = true
+      break
+    elseif in_processors then
+      local entry = line:match("^%-%s*(.-)%s*$")
+      if entry then
+        entries[#entries + 1] = entry
+      end
+    end
+  end
+
+  if not in_processors or not found_segmentors then
+    error(label .. ": expected engine.processors block ending at segmentors", 3)
+  end
+  return entries
+end
+
+local function assert_processor_order(text, first, second, label)
+  local first_count, second_count = 0, 0
+  local first_index, second_index
+  for index, entry in ipairs(processor_entries(text, label)) do
+    if entry == first then
+      first_count = first_count + 1
+      first_index = index
+    elseif entry == second then
+      second_count = second_count + 1
+      second_index = index
+    end
+  end
+  if first_count ~= 1 then
+    error(label .. ": expected exactly one processors entry " .. first, 2)
+  end
+  if second_count ~= 1 then
+    error(label .. ": expected exactly one processors entry " .. second, 2)
+  end
+  if first_index >= second_index then
+    error(label .. ": expected " .. first .. " before " .. second, 2)
+  end
+end
+
 local function legacy_full_name(prefix)
   return prefix .. "_ful" .. "l"
 end
@@ -129,11 +205,33 @@ local function test_smart_candidate_selection_configuration()
   assert_contains(guide, "重新部署", "guide states how static setting changes take effect")
 end
 
+local function test_processor_order_ignores_misleading_substrings()
+  local misleading = [[
+engine:
+  processors:
+    - lua_processor@*tiger_user_words*processor_extra
+    # lua_processor@*tiger_user_words*processor
+    - ascii_composer
+  segmentors:
+    - abc_segmentor
+]]
+  local ok = pcall(
+    assert_processor_order,
+    misleading,
+    "lua_processor@*tiger_user_words*processor",
+    "ascii_composer",
+    "processor order"
+  )
+  if ok then
+    error("processor order must ignore misleading comments and values", 2)
+  end
+end
+
 local function test_shared_user_word_management_order()
   local base = read("tiger_base.schema.yaml")
-  assert_contains(base, "lua_processor@*tiger_user_words*processor", "base includes shared user-word processor")
-  assert_order(base, "lua_processor@*tiger_user_words*processor", "lua_processor@*space_proc3", "user-word processor runs before space processor")
-  assert_order(base, "lua_processor@*tiger_user_words*processor", "lua_processor@*symbol_proc", "user-word processor runs before symbol processor")
+  assert_processor_order(base, "lua_processor@*tiger_user_words*processor", "ascii_composer", "user-word processor must run before ascii composer")
+  assert_processor_order(base, "lua_processor@*tiger_user_words*processor", "lua_processor@*space_proc3", "user-word processor runs before space processor")
+  assert_processor_order(base, "lua_processor@*tiger_user_words*processor", "lua_processor@*symbol_proc", "user-word processor runs before symbol processor")
   assert_contains(base, "lua_filter@*tiger_user_words*filter", "base includes shared user-word filter")
   assert_order(base, "lua_filter@*tiger_user_words*filter", "lua_filter@*core2022_filter", "user words run before charset filter")
 
@@ -143,7 +241,7 @@ local function test_shared_user_word_management_order()
 
   local example = read("配置说明/示例.schema.yaml")
   assert_contains(example, "lua_processor@*tiger_user_words*processor", "schema example includes shared user-word processor")
-  assert_order(example, "lua_processor@*tiger_user_words*processor", "lua_processor@*space_proc3", "schema example keeps processor order")
+  assert_processor_order(example, "lua_processor@*tiger_user_words*processor", "lua_processor@*space_proc3", "schema example keeps processor order")
   assert_contains(example, "lua_filter@*tiger_user_words*filter", "schema example includes shared user-word filter")
   assert_order(example, "lua_filter@*tiger_user_words*filter", "lua_filter@*core2022_filter", "schema example keeps filter order")
   assert_not_contains(example, "单字版不要加", "schema example does not restrict user words to Tigress")
@@ -170,6 +268,87 @@ local function test_user_word_management_documentation()
   assert_contains(custom_example, "tigress.user.dict.yaml", "custom example names the Tigress user dictionary")
 end
 
+local function test_table_export_wiring()
+  local rime = read("rime.lua")
+  local base = read("tiger_base.schema.yaml")
+  local hints = read("lua/symbol_hint.lua")
+
+  assert_contains(rime, 'table_export = require("table_export")', "rime registers table export")
+  assert_contains(base, "lua_processor@*table_export*processor", "base includes table export processor")
+  assert_contains(base, "lua_translator@*table_export*translator", "base includes table export translator")
+  assert_contains(hints, '{ code = "dcck", label = "导出词库" }', "symbol hints include table export")
+  assert_order(base, "lua_processor@*table_export*processor", "key_binder", "table export processor runs before key binder")
+  assert_order(base, "lua_translator@*table_export*translator", "table_translator", "table export translator runs before table translator")
+  assert_occurrences(base, "lua_processor@*table_export*processor", 1, "base has one shared table export processor")
+  assert_occurrences(base, "lua_translator@*table_export*translator", 1, "base has one shared table export translator")
+end
+
+local function test_table_export_hint_is_limited_to_supported_schemas()
+  local previous_path = package.path
+  package.path = "./lua/?.lua;" .. package.path
+  package.loaded.symbol_hint = nil
+  package.loaded.table_export = nil
+  local symbol_hint = require("symbol_hint")
+  local table_export = require("table_export")
+  package.path = previous_path
+
+  local function translate(input, schema_id, translators)
+    local candidates = {}
+    local previous_candidate = Candidate
+    local previous_yield = yield
+    Candidate = function(candidate_type, start, finish, text, comment)
+      return { type = candidate_type, start = start, _end = finish, text = text, comment = comment }
+    end
+    yield = function(candidate)
+      candidates[#candidates + 1] = candidate
+    end
+    local env
+    if schema_id then
+      env = { engine = { schema = { schema_id = schema_id } } }
+    end
+    local ok, err = pcall(function()
+      for _, translator in ipairs(translators or { symbol_hint }) do
+        translator(input, { start = 0, _end = #input }, env)
+      end
+    end)
+    Candidate = previous_candidate
+    yield = previous_yield
+    assert(ok, err)
+    return candidates
+  end
+
+  local function has_text(candidates, expected)
+    for _, candidate in ipairs(candidates) do
+      if candidate.text == expected then
+        return true
+      end
+    end
+    return false
+  end
+
+  for _, schema_id in ipairs({ "tiger", "tigress" }) do
+    for _, input in ipairs({ "\\d", "\\dc", "\\dcc" }) do
+      assert_equal(
+        has_text(translate(input, schema_id), "\\dcck 导出词库"),
+        true,
+        schema_id .. " discovers table export from " .. input
+      )
+    end
+    assert_equal(#translate("\\dcck", schema_id), 0, schema_id .. " exact command hides symbol hint")
+
+    local combined = translate("\\dcck", schema_id, { symbol_hint, table_export.translator })
+    assert_equal(#combined, 2, schema_id .. " exact command has only table export actions")
+    assert_equal(combined[1].text, "确认导出当前方案", schema_id .. " first table export action")
+    assert_equal(combined[2].text, "取消", schema_id .. " second table export action")
+  end
+  assert_equal(#translate("\\dcck", "PY_c"), 0, "PY_c hides table export hint")
+  assert_equal(#translate("\\dcck"), 0, "missing schema hides table export hint")
+
+  local pinyin_symbol = translate("\\fh", "PY_c")
+  assert_equal(#pinyin_symbol, 1, "PY_c keeps existing symbol hints")
+  assert_equal(pinyin_symbol[1].text, "\\fh 符号", "PY_c existing symbol hint text")
+end
+
 local tests = {
   test_default_schema_list_and_saved_option,
   test_full_internal_files_are_removed,
@@ -177,8 +356,11 @@ local tests = {
   test_extended_dictionaries_import_full_tables,
   test_base_schema_has_filter_switch_and_binding,
   test_smart_candidate_selection_configuration,
+  test_processor_order_ignores_misleading_substrings,
   test_shared_user_word_management_order,
   test_user_word_management_documentation,
+  test_table_export_wiring,
+  test_table_export_hint_is_limited_to_supported_schemas,
 }
 
 for _, test in ipairs(tests) do
