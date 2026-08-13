@@ -270,7 +270,7 @@ local management_code_property = "tiger_user_words_management_code"
 
 local function capture_token(engine, create)
     local context = engine.context
-    local token = context:get_property(capture_token_property)
+    local token = context:get_property(capture_token_property) or ""
     if token == "" and create then
         capture_token_counter = capture_token_counter + 1
         token = capture_token_prefix .. capture_token_counter
@@ -823,9 +823,13 @@ end
 local function clear_capture(env)
     local capture = get_capture(env.engine)
     if capture then
-        env.engine.context:set_option("ascii_mode", capture.original_ascii_mode)
-        if capture.original_auto_commit ~= nil then
-            env.engine.context:set_option("_auto_commit", capture.original_auto_commit)
+        local context = env.engine.context
+        if context:get_option("ascii_mode") ~= capture.original_ascii_mode then
+            context:set_option("ascii_mode", capture.original_ascii_mode)
+        end
+        if capture.original_auto_commit ~= nil
+            and context:get_option("_auto_commit") ~= capture.original_auto_commit then
+            context:set_option("_auto_commit", capture.original_auto_commit)
         end
     end
     clear_engine_capture(env.engine)
@@ -1127,7 +1131,7 @@ local function disable_selected(env)
 end
 
 local function management_code(env)
-    return env.engine.context:get_property(management_code_property)
+    return env.engine.context:get_property(management_code_property) or ""
 end
 
 local function set_management_code(env, code)

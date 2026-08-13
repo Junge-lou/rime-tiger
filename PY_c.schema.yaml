@@ -2,6 +2,8 @@
 # encoding: utf-8
 
 schema:
+  icon: icons/zh.ico # Windows 中英文切换提示图标
+  ascii_icon: icons/en.ico
   schema_id: PY_c
   name: 拼音++
   version: "0.18"

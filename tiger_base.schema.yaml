@@ -20,6 +20,8 @@
 #   4. 候选数、样式、个人补丁优先改对应的 *.custom.yaml。
 
 schema:
+  icon: icons/zh.ico # Windows 中英文切换提示图标
+  ascii_icon: icons/en.ico
   author:
     - {}
   dependencies:

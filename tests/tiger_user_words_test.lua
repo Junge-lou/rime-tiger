@@ -168,6 +168,7 @@ local function new_init_env(schema_id)
   end
   function context:set_option(name, value)
     options[name] = value
+    self.option_write_count = (self.option_write_count or 0) + 1
   end
   return {
     engine = {
@@ -192,6 +193,10 @@ words.processor.init(tiger_env)
 words.processor.init(second_tiger_env)
 words.processor.init(tigress_env)
 
+local writes_before_idle_commit = tiger_env.engine.context.property_write_count or 0
+tiger_env.engine.context.commit_notifier.callback()
+assert((tiger_env.engine.context.property_write_count or 0) == writes_before_idle_commit,
+  "ordinary commits must not rewrite an empty management property")
 assert(tiger_env.state.config.extended_dict == "tiger.user.dict.yaml")
 assert(tigress_env.state.config.extended_dict == "tigress.user.dict.yaml")
 assert(tiger_env.state == second_tiger_env.state)
@@ -510,11 +515,6 @@ do
 
   assert(words.processor.func(plain_key(0xff1b), env) == 2)
   assert(env.engine.context:get_property("tiger_user_words_management_code") == "")
-
-  local writes_before_idle_commit = env.engine.context.property_write_count or 0
-  env.engine.context.commit_notifier.callback()
-  assert((env.engine.context.property_write_count or 0) == writes_before_idle_commit,
-    "ordinary commits must not rewrite an already-empty management property")
 
   assert(words.processor.func(key(0x4d, { ctrl = true, shift = true }), env) == 1)
   env.engine.context.commit_notifier.callback()
@@ -914,6 +914,31 @@ runtime_case("capture temporarily disables native auto commit", function()
   assert(env.engine.context:get_option("_auto_commit") == false)
   assert(words.processor.func(plain_key(0xff1b), env) == 1)
   assert(env.engine.context:get_option("_auto_commit") == true)
+end)
+
+runtime_case("capture cleanup does not re-notify an unchanged language mode", function()
+  local env = new_runtime_env("tiger", "same", {})
+  words.processor.init(env)
+  start_capture(env)
+  local writes_before_cleanup = env.engine.context.option_write_count or 0
+  assert(words.processor.func(plain_key(0xff1b), env) == 1)
+  assert((env.engine.context.option_write_count or 0) == writes_before_cleanup,
+    "restoring an unchanged ascii_mode must not emit an option notification")
+end)
+
+runtime_case("missing properties do not create writes during ordinary typing", function()
+  local env = new_runtime_env("tiger", "", {})
+  function env.engine.context:get_property()
+    return nil
+  end
+  words.processor.init(env)
+  local writes_before_key = env.engine.context.property_write_count or 0
+  env.engine.context.commit_notifier.callback()
+  assert((env.engine.context.property_write_count or 0) == writes_before_key,
+    "a missing property must be treated as empty during ordinary commits")
+  assert(words.processor.func(plain_key(0x61), env) == 2)
+  assert((env.engine.context.property_write_count or 0) == writes_before_key,
+    "a missing property must be treated as empty during ordinary typing")
 end)
 
 runtime_case("Chinese keypad and punctuation conversion", function()

@@ -124,6 +124,22 @@ local function test_default_schema_list_and_saved_option()
   assert_contains(text, "- extended_char", "save_options saves extended_char")
 end
 
+local function test_windows_status_icons_are_explicit()
+  local base = read("tiger_base.schema.yaml")
+  local pinyin = read("PY_c.schema.yaml")
+  assert_not_contains(read("weasel.custom.yaml"), "show_notifications: false",
+    "Windows status notifications must remain visible")
+  for _, schema in ipairs({ base, pinyin }) do
+    assert_contains(schema, "  icon: icons/zh.ico", "schema provides a Chinese status icon")
+    assert_contains(schema, "  ascii_icon: icons/en.ico", "schema provides an ASCII status icon")
+  end
+  for _, path in ipairs({ "icons/zh.ico", "icons/en.ico" }) do
+    local file = io.open(path, "rb")
+    assert(file, "status icon asset must exist: " .. path)
+    file:close()
+  end
+end
+
 local function test_full_internal_files_are_removed()
   local paths = {
     legacy_full_name("tiger") .. ".schema.yaml",
@@ -361,6 +377,7 @@ end
 
 local tests = {
   test_default_schema_list_and_saved_option,
+  test_windows_status_icons_are_explicit,
   test_full_internal_files_are_removed,
   test_schema_dictionaries_use_merged_sources,
   test_extended_dictionaries_import_full_tables,
