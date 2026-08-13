@@ -241,7 +241,6 @@ key_binder:
   # import_preset: default  # 需要默认按键时可启用
   bindings:
     - { accept: space, send: space, when: has_menu }  # 有候选时空格上屏首选
-    - { accept: space, send: Escape, when: composing }  # 空码时空格清屏
     - { accept: semicolon, send: 2, when: has_menu }  # 分号选第 2 个
     - { accept: apostrophe, send: 3, when: has_menu }  # 单引号选第 3 个
     - { accept: Tab, send: Escape, when: composing }  # Tab 清屏

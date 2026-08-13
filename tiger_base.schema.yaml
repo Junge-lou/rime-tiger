@@ -182,7 +182,6 @@ key_binder:
   bindings:
     #- { when: composing, accept: Return, send: Escape } # 回车清屏编码
     - { accept: space, send: space, when: has_menu } # 有候选时空格上屏首选
-    - { accept: space, send: Escape, when: composing } # 无候选(空码）时空格清屏编码
     - { accept: semicolon, send: 2, when: has_menu } # 分号次选
     - { when: has_menu, accept: apostrophe, send: 3 } # 引号三选
     - { when: composing, accept: Tab, send: Escape } # tab清屏

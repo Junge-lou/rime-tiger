@@ -269,6 +269,17 @@ local function test_shared_user_word_management_order()
   assert_not_contains(example, "单字版不要加", "schema example does not restrict user words to Tigress")
 end
 
+local function test_space_processor_is_the_only_empty_code_handler()
+  local base = read("tiger_base.schema.yaml")
+  assert_contains(base, "lua_processor@*space_proc3", "base enables the empty-code processor")
+  assert_not_contains(base, "accept: space, send: Escape, when: composing",
+    "key binder must not clear states intentionally passed through by space_proc3")
+
+  local example = read("配置说明/示例.schema.yaml")
+  assert_not_contains(example, "accept: space, send: Escape, when: composing",
+    "schema example must not duplicate the empty-code handler")
+end
+
 local function test_user_word_management_documentation()
   for _, path in ipairs({ "README.md", "配置说明/配置说明.txt" }) do
     local text = read(path)
@@ -385,6 +396,7 @@ local tests = {
   test_smart_candidate_selection_configuration,
   test_processor_order_ignores_misleading_substrings,
   test_shared_user_word_management_order,
+  test_space_processor_is_the_only_empty_code_handler,
   test_user_word_management_documentation,
   test_table_export_wiring,
   test_table_export_hint_is_limited_to_supported_schemas,
