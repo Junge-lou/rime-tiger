@@ -102,6 +102,11 @@ function space_proc.func(key_event, env)
     return kNoop
   end
 
+  -- 数字后的 ./: 由 punctuator 暂存；空格或后续数字应交回 punctuator 提交。
+  if seg.has_tag and seg:has_tag("punct_number") then
+    return kNoop
+  end
+
   -- 检查是否为空码状态（无候选词）
   local isEmptyCode = false
   if not context:has_menu() then
