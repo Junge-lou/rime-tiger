@@ -175,9 +175,11 @@ local function new_env(schema_id, dictionary, selected_index, custom_config)
   end
   function context:set_property(name, value)
     self.properties[name] = value
+    self.property_write_count = (self.property_write_count or 0) + 1
   end
   function context:clear_property(name)
     self.properties[name] = nil
+    self.property_write_count = (self.property_write_count or 0) + 1
   end
   local env = {
     engine = {
@@ -507,7 +509,11 @@ local function test_failure_status_and_unrelated_input_or_key()
   unrelated_input.engine.context.input = "abc"
   local calls = #snapshot_calls
   assert_equal(press(unrelated_input, 0x20), kNoop, "unrelated input no-op")
-  assert_equal(#translated(unrelated_input), 0, "unrelated input no candidates")
+  for _ = 1, 3 do
+    assert_equal(#translated(unrelated_input), 0, "unrelated input no candidates")
+  end
+  assert_equal(unrelated_input.engine.context.property_write_count or 0, 0,
+    "ordinary candidate refreshes must not emit frontend property notifications")
   assert_equal(#snapshot_calls, calls, "unrelated input does not snapshot")
 
   local unrelated_key = new_env("tiger", "tiger.extended")

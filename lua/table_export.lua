@@ -417,7 +417,7 @@ end
 local function translator(input, seg, env)
   local context = context_from(env)
   if input ~= COMMAND then
-    if context then
+    if read_property(context, PROPERTY_MODE) then
       clear_export_state(context)
     end
     return
